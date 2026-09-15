@@ -11,3 +11,5 @@ keywords:
   - dns
   - technitium
   - operator
+annotations:
+  org.opencontainers.image.source: https://github.com/charg/technitium-operator
