@@ -11,7 +11,6 @@ repo: github.com/charg/technitium-operator
 resources:
 - api:
     crdVersion: v1
-    namespaced: true
   controller: true
   domain: packet.fail
   group: dns
