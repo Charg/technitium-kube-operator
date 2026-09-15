@@ -1,0 +1,59 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Helm
+*.tgz
+charts/*/charts/
+charts/*/Chart.lock
+.cr-release-packages/
+.cr-index/
+
+# helm-unittest / helm-docs artifacts
+*.snap.actual
+
+# Local scratch / planning
+.scratch/
+
+# Local secrets / env
+.env
+.env.*
+*.local.yaml
+secrets.yaml
+
+# kind / test clusters
+kubeconfig*
+.kind/
+
+# cosign / sigstore local artifacts
+*.sig
+*.pem
+cosign.key
+
+# nix
+result
+result-*
+.direnv/
+
+# Misc build output
+dist/
+tmp/
+.cache/
+
+# Ignore personal Claude Code configurations and plans
+# Personal preferences and auto-allow permissions
+.claude/settings.local.json
+# Process lock for background schedules
+.claude/scheduled_tasks.lock
+# Parallel agent workspaces (duplicate codebase clones)
+.claude/worktrees/
+# Auto-memory state and local conversation history
+.claude/memory/
+.claude/plans/
+# Local, per-developer project instructions
+CLAUDE.local.md
