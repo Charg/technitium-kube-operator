@@ -1,0 +1,76 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: [
+    "config:recommended",
+    ":dependencyDashboard",
+    ":semanticCommits",
+    // Actions are already SHA-pinned with # vX.Y.Z comments; keep the digest and comment in sync.
+    "helpers:pinGitHubActionDigests",
+  ],
+
+  // release-please owns commit/PR wording, so match its conventional-commit types.
+  semanticCommitType: "fix",
+  commitMessageLowerCase: "auto",
+
+  labels: ["dependencies"],
+  rangeStrategy: "bump",
+
+  // k8s.io/* and sigs.k8s.io/* release in lockstep against a Kubernetes minor;
+  // bumping them individually produces incompatible go.mod graphs.
+  packageRules: [
+    {
+      matchManagers: ["gomod"],
+      matchPackageNames: ["k8s.io/**", "sigs.k8s.io/**"],
+      groupName: "kubernetes packages",
+    },
+    {
+      matchManagers: ["gomod"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "go dependencies (non-major)",
+    },
+    // go.mod pins the toolchain; treat it as a deliberate, separate change.
+    {
+      matchManagers: ["gomod"],
+      matchDepTypes: ["golang"],
+      groupName: "go toolchain",
+    },
+    // Chart version/appVersion carry x-release-please-version markers; Renovate must not touch them.
+    {
+      matchFileNames: ["charts/technitium-operator/Chart.yaml"],
+      enabled: false,
+    },
+  ],
+
+  // flake.lock refresh: pin nixpkgs/flake-utils inputs on a schedule.
+  nix: { enabled: true },
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 6am on monday"],
+  },
+
+  // Tool versions pinned as just variables. Track upstream releases without editing the justfile.
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^justfile$/"],
+      matchStrings: ['kustomize_version := "(?<currentValue>v[^"]+)"'],
+      datasourceTemplate: "github-releases",
+      depNameTemplate: "kubernetes-sigs/kustomize",
+      extractVersionTemplate: "^kustomize/(?<version>.+)$",
+    },
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^justfile$/"],
+      matchStrings: ['controller_tools_version := "(?<currentValue>v[^"]+)"'],
+      datasourceTemplate: "github-releases",
+      depNameTemplate: "kubernetes-sigs/controller-tools",
+    },
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^justfile$/"],
+      matchStrings: ['golangci_lint_version := "(?<currentValue>v[^"]+)"'],
+      datasourceTemplate: "github-releases",
+      depNameTemplate: "golangci/golangci-lint",
+    },
+  ],
+}
