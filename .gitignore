@@ -45,6 +45,12 @@ dist/
 tmp/
 .cache/
 
+# Go / kubebuilder build output
+bin/
+*.out
+cover.out
+vendor/
+
 # Ignore personal Claude Code configurations and plans
 # Personal preferences and auto-allow permissions
 .claude/settings.local.json
