@@ -1,0 +1,13 @@
+apiVersion: v2
+name: technitium-operator
+description: A Kubernetes operator for managing Technitium DNS zones
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/charg/technitium-operator
+sources:
+  - https://github.com/charg/technitium-operator
+keywords:
+  - dns
+  - technitium
+  - operator

@@ -1,0 +1,22 @@
+technitium-operator has been installed.
+
+Check the controller manager status with:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l "{{ include "technitium-operator.selectorLabels" . }}"
+
+{{- if .Values.crds.install }}
+
+The Zone CRD (zones.dns.packet.fail) has been installed. Create a Zone with:
+
+  kubectl apply -f - <<EOF
+  apiVersion: dns.packet.fail/v1alpha1
+  kind: Zone
+  metadata:
+    name: zone-sample
+  spec: {}
+  EOF
+{{- else }}
+
+CRD installation was disabled (crds.install=false). Make sure the
+zones.dns.packet.fail CRD is installed separately before creating Zone resources.
+{{- end }}

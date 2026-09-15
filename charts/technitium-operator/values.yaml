@@ -1,0 +1,109 @@
+## @section Global
+
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/charg/technitium-operator
+  # Defaults to the chart's appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+## @section CRDs
+
+crds:
+  # Install the Zone CustomResourceDefinition as part of this chart.
+  install: true
+  # Annotate the CRD so `helm uninstall` does not delete it (and the Zone
+  # resources stored under it) along with the release.
+  keep: true
+
+## @section RBAC / ServiceAccount
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+rbac:
+  # Create the ClusterRole/ClusterRoleBinding and leader-election Role/RoleBinding
+  # required by the controller manager.
+  create: true
+  # Create the additional zone-admin/zone-editor/zone-viewer ClusterRoles that
+  # cluster admins can bind to users/groups to delegate access to Zone resources.
+  # These are not used by the operator itself.
+  zoneAggregateRoles: true
+
+## @section Pod configuration
+
+podAnnotations:
+  kubectl.kubernetes.io/default-container: manager
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+terminationGracePeriodSeconds: 10
+
+## @section Manager configuration
+
+leaderElection:
+  enabled: true
+
+healthProbe:
+  port: 8081
+
+## @section Metrics
+
+metrics:
+  # Expose the /metrics endpoint over HTTPS (authenticated via TokenReview/SubjectAccessReview).
+  enabled: true
+  port: 8443
+  service:
+    annotations: {}
+  serviceMonitor:
+    # Requires the Prometheus Operator CRDs to be installed in the cluster.
+    enabled: false
+    interval: ""
+    scrapeTimeout: ""
+    additionalLabels: {}
+    tlsConfig:
+      insecureSkipVerify: true
+
+## @section NetworkPolicy
+
+networkPolicy:
+  # Restrict ingress to the /metrics endpoint to namespaces labeled `metrics: enabled`.
+  enabled: false
+
+## @section Extra customization
+
+extraArgs: []
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
