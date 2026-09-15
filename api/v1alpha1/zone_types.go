@@ -21,29 +21,76 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+// ZoneType is the category of zone created on the Technitium server. The
+// values map to the `type` parameter of the Technitium /api/zones/create API.
+// +kubebuilder:validation:Enum=Primary;Secondary;Stub;Forwarder;Catalog
+type ZoneType string
 
-// ZoneSpec defines the desired state of Zone
+const (
+	ZoneTypePrimary   ZoneType = "Primary"
+	ZoneTypeSecondary ZoneType = "Secondary"
+	ZoneTypeStub      ZoneType = "Stub"
+	ZoneTypeForwarder ZoneType = "Forwarder"
+	ZoneTypeCatalog   ZoneType = "Catalog"
+)
+
+// ForwarderProtocol is the transport used to reach the upstream resolver of a
+// Forwarder zone. The values map to the `protocol` parameter of the Technitium
+// create-zone API.
+// +kubebuilder:validation:Enum=Udp;Tcp;Tls;Https;Quic
+type ForwarderProtocol string
+
+const (
+	ForwarderProtocolUDP   ForwarderProtocol = "Udp"
+	ForwarderProtocolTCP   ForwarderProtocol = "Tcp"
+	ForwarderProtocolTLS   ForwarderProtocol = "Tls"
+	ForwarderProtocolHTTPS ForwarderProtocol = "Https"
+	ForwarderProtocolQUIC  ForwarderProtocol = "Quic"
+)
+
+// ZoneSpec defines the desired state of Zone.
 type ZoneSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// zoneName is the fully qualified DNS name of the zone, for example
+	// "example.com". It is required and immutable: change the name by deleting
+	// and recreating the resource, since renaming a live zone on the server is
+	// not a safe in-place operation.
+	// +required
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zoneName is immutable"
+	ZoneName string `json:"zoneName"`
 
-	// foo is an example field of Zone. Edit zone_types.go to remove/update
+	// type is the category of zone to create on the Technitium server.
+	// +kubebuilder:default=Primary
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Type ZoneType `json:"type,omitempty"`
+
+	// primaryNameServerAddresses lists the IP addresses or hostnames of the
+	// primary name server. Used by Secondary and Stub zones to locate the
+	// upstream primary; ignored by other zone types.
+	// +optional
+	PrimaryNameServerAddresses []string `json:"primaryNameServerAddresses,omitempty"`
+
+	// forwarder is the address (IP or hostname) of the upstream resolver used
+	// by a Forwarder zone. The special value "this-server" forwards to the
+	// local DNS server. Ignored by other zone types.
+	// +optional
+	Forwarder *string `json:"forwarder,omitempty"`
+
+	// forwarderProtocol is the transport used to reach the forwarder of a
+	// Forwarder zone. Defaults to Udp on the server when unset. Ignored by
+	// other zone types.
+	// +optional
+	ForwarderProtocol *ForwarderProtocol `json:"forwarderProtocol,omitempty"`
+
+	// catalog is the name of an existing catalog zone that this zone joins as a
+	// member. Applies to Primary, Secondary, Stub, and Forwarder zones.
+	// +optional
+	Catalog *string `json:"catalog,omitempty"`
 }
 
 // ZoneStatus defines the observed state of Zone.
 type ZoneStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
 	// conditions represent the current state of the Zone resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
@@ -57,12 +104,32 @@ type ZoneStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// observedGeneration is the .metadata.generation the controller last
+	// reconciled. A value behind .metadata.generation means the observed state
+	// is stale.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// zoneCreated reports whether the zone currently exists on the Technitium
+	// server.
+	// +optional
+	ZoneCreated bool `json:"zoneCreated,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster
+// +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=`.spec.zoneName`
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Created",type=boolean,JSONPath=`.status.zoneCreated`
 
-// Zone is the Schema for the zones API
+// Zone is the Schema for the zones API.
+//
+// Zone is cluster-scoped: a Technitium server exposes one global zone namespace,
+// so a zoneName must be unique across the whole cluster rather than per
+// Kubernetes namespace. This avoids two namespaces silently declaring conflicting
+// state for the same zone on a single server.
 type Zone struct {
 	metav1.TypeMeta `json:",inline"`
 

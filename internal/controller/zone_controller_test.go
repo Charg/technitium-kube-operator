@@ -32,16 +32,13 @@ import (
 
 var _ = Describe("Zone Controller", func() {
 	Context("When reconciling a resource", func() {
-		const (
-			resourceName      = "test-resource"
-			resourceNamespace = "default"
-		)
+		const resourceName = "test-resource"
 
 		ctx := context.Background()
 
+		// Zone is cluster-scoped, so the lookup key carries no namespace.
 		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: resourceNamespace,
+			Name: resourceName,
 		}
 		zone := &dnsv1alpha1.Zone{}
 
@@ -51,10 +48,11 @@ var _ = Describe("Zone Controller", func() {
 			if err != nil && errors.IsNotFound(err) {
 				resource := &dnsv1alpha1.Zone{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: resourceNamespace,
+						Name: resourceName,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: dnsv1alpha1.ZoneSpec{
+						ZoneName: "example.com",
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

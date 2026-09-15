@@ -17,12 +17,28 @@ spec:
     listKind: ZoneList
     plural: zones
     singular: zone
-  scope: Namespaced
+  scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.zoneName
+      name: Zone
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .status.zoneCreated
+      name: Created
+      type: boolean
+    name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Zone is the Schema for the zones API
+        description: |-
+          Zone is the Schema for the zones API.
+
+          Zone is cluster-scoped: a Technitium server exposes one global zone namespace,
+          so a zoneName must be unique across the whole cluster rather than per
+          Kubernetes namespace. This avoids two namespaces silently declaring conflicting
+          state for the same zone on a single server.
         properties:
           apiVersion:
             description: |-
@@ -44,10 +60,62 @@ spec:
           spec:
             description: spec defines the desired state of Zone
             properties:
-              foo:
-                description: foo is an example field of Zone. Edit zone_types.go to
-                  remove/update
+              catalog:
+                description: |-
+                  catalog is the name of an existing catalog zone that this zone joins as a
+                  member. Applies to Primary, Secondary, Stub, and Forwarder zones.
                 type: string
+              forwarder:
+                description: |-
+                  forwarder is the address (IP or hostname) of the upstream resolver used
+                  by a Forwarder zone. The special value "this-server" forwards to the
+                  local DNS server. Ignored by other zone types.
+                type: string
+              forwarderProtocol:
+                description: |-
+                  forwarderProtocol is the transport used to reach the forwarder of a
+                  Forwarder zone. Defaults to Udp on the server when unset. Ignored by
+                  other zone types.
+                enum:
+                - Udp
+                - Tcp
+                - Tls
+                - Https
+                - Quic
+                type: string
+              primaryNameServerAddresses:
+                description: |-
+                  primaryNameServerAddresses lists the IP addresses or hostnames of the
+                  primary name server. Used by Secondary and Stub zones to locate the
+                  upstream primary; ignored by other zone types.
+                items:
+                  type: string
+                type: array
+              type:
+                default: Primary
+                description: type is the category of zone to create on the Technitium
+                  server.
+                enum:
+                - Primary
+                - Secondary
+                - Stub
+                - Forwarder
+                - Catalog
+                type: string
+              zoneName:
+                description: |-
+                  zoneName is the fully qualified DNS name of the zone, for example
+                  "example.com". It is required and immutable: change the name by deleting
+                  and recreating the resource, since renaming a live zone on the server is
+                  not a safe in-place operation.
+                maxLength: 253
+                pattern: ^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$
+                type: string
+                x-kubernetes-validations:
+                - message: zoneName is immutable
+                  rule: self == oldSelf
+            required:
+            - zoneName
             type: object
           status:
             description: status defines the observed state of Zone
@@ -121,6 +189,18 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  observedGeneration is the .metadata.generation the controller last
+                  reconciled. A value behind .metadata.generation means the observed state
+                  is stale.
+                format: int64
+                type: integer
+              zoneCreated:
+                description: |-
+                  zoneCreated reports whether the zone currently exists on the Technitium
+                  server.
+                type: boolean
             type: object
         required:
         - spec

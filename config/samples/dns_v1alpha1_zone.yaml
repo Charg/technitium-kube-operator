@@ -6,4 +6,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: zone-sample
 spec:
-  # TODO(user): Add fields here
+  zoneName: example.com
+  type: Primary
