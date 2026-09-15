@@ -17,7 +17,7 @@
             go
             gotools
             golangci-lint
-            gnumake
+            jq
             just
             kubebuilder
             kustomize

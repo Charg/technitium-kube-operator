@@ -23,7 +23,10 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install just
+        run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
       - name: Check linter configuration
-        run: make lint-config
+        run: just lint-config
       - name: Run linter
-        run: make lint
+        run: just lint
