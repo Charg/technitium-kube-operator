@@ -34,6 +34,7 @@ import (
 	"github.com/charg/technitium-operator/internal/config"
 	"github.com/charg/technitium-operator/internal/controller"
 	"github.com/charg/technitium-operator/internal/technitium"
+	webhookv1alpha1 "github.com/charg/technitium-operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -195,6 +196,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "zone")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupZoneWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "Zone")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 
