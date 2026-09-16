@@ -17,7 +17,7 @@ localbin := justfile_directory() / "bin"
 
 kustomize_version := "v5.8.1"
 controller_tools_version := "v0.22.0"
-golangci_lint_version := "v2.12.2"
+golangci_lint_version := "v2.13.2"
 
 kustomize := localbin / "kustomize"
 controller_gen := localbin / "controller-gen"
