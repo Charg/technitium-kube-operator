@@ -143,6 +143,11 @@ type ClusterStatus struct {
 	// +optional
 	ClusterDomain string `json:"clusterDomain,omitempty"`
 
+	// members summarizes observed membership as "joined/total", for example
+	// "2/3" while one node is still converging.
+	// +optional
+	Members string `json:"members,omitempty"`
+
 	// nodes reports per-node observed membership, primary first.
 	// +optional
 	// +listType=map
@@ -155,6 +160,7 @@ type ClusterStatus struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Domain",type=string,JSONPath=`.spec.clusterDomain`
 // +kubebuilder:printcolumn:name="Primary",type=string,JSONPath=`.spec.primary.name`
+// +kubebuilder:printcolumn:name="Members",type=string,JSONPath=`.status.members`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

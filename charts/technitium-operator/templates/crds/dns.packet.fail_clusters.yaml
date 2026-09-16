@@ -26,6 +26,9 @@ spec:
     - jsonPath: .spec.primary.name
       name: Primary
       type: string
+    - jsonPath: .status.members
+      name: Members
+      type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
       type: string
@@ -282,6 +285,11 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              members:
+                description: |-
+                  members summarizes observed membership as "joined/total", for example
+                  "2/3" while one node is still converging.
+                type: string
               nodes:
                 description: nodes reports per-node observed membership, primary first.
                 items:

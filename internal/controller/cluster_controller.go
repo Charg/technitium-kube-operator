@@ -370,6 +370,7 @@ func (r *ClusterReconciler) writeClusterStatus(ctx context.Context, key client.O
 
 	cluster.Status.Nodes = outcome.nodes
 	cluster.Status.ClusterDomain = outcome.domain
+	cluster.Status.Members = membersSummary(outcome.nodes)
 	cluster.Status.ObservedGeneration = cluster.Generation
 
 	if outcome.ready {
@@ -399,6 +400,18 @@ func (r *ClusterReconciler) markClusterDegraded(ctx context.Context, key client.
 	setClusterCondition(&cluster, clusterConditionDegraded, metav1.ConditionTrue, "ReconcileFailed", cause.Error())
 
 	return r.Status().Update(ctx, &cluster)
+}
+
+// membersSummary reports observed membership as "joined/total" for the Members
+// printer column.
+func membersSummary(nodes []dnsv1alpha1.ClusterNodeStatus) string {
+	joined := 0
+	for _, n := range nodes {
+		if n.Member {
+			joined++
+		}
+	}
+	return fmt.Sprintf("%d/%d", joined, len(nodes))
 }
 
 // pendingNodesMessage summarizes which nodes are not yet members, for the Ready

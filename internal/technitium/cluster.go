@@ -22,8 +22,8 @@ const (
 	ClusterNodeTypeSecondary = "Secondary"
 )
 
-// ClusterNodeState is the membership state of a node as seen from the node the
-// state was read from. "Self" marks the node answering the request.
+// clusterNodeStateSelf is the value of a node's "state" field marking the node
+// that answered the state request, as opposed to a peer it can see.
 const clusterNodeStateSelf = "Self"
 
 // ClusterNodeInfo is a single entry from the clusterNodes array of
@@ -98,12 +98,10 @@ type ClusterInitJoinOptions struct {
 	PrimaryNodeIPAddress string
 	// PrimaryNodeUsername and PrimaryNodePassword authenticate to the primary.
 	// The account must be a local administrator: the server rejects SSO accounts
-	// for cluster initialization.
+	// for cluster initialization. It also must not require two-factor
+	// authentication, since the operator cannot supply a live one-time code.
 	PrimaryNodeUsername string
 	PrimaryNodePassword string
-	// PrimaryNodeTOTP is the current time-based one-time code when the primary
-	// account has two-factor authentication enabled.
-	PrimaryNodeTOTP string
 	// IgnoreCertificateErrors skips TLS verification of the primary, needed when
 	// the primary presents the self-signed certificate that clustering enables.
 	IgnoreCertificateErrors bool
@@ -163,9 +161,6 @@ func (c *Client) ClusterInitJoin(ctx context.Context, opts ClusterInitJoinOption
 	params.Set("primaryNodePassword", opts.PrimaryNodePassword)
 	if opts.PrimaryNodeIPAddress != "" {
 		params.Set("primaryNodeIpAddress", opts.PrimaryNodeIPAddress)
-	}
-	if opts.PrimaryNodeTOTP != "" {
-		params.Set("primaryNodeTotp", opts.PrimaryNodeTOTP)
 	}
 	if opts.IgnoreCertificateErrors {
 		params.Set("ignoreCertificateErrors", strconv.FormatBool(true))
