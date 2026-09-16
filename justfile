@@ -16,7 +16,7 @@ kind := env_var_or_default("KIND", "kind")
 localbin := justfile_directory() / "bin"
 
 kustomize_version := "v5.8.1"
-controller_tools_version := "v0.21.0"
+controller_tools_version := "v0.22.0"
 golangci_lint_version := "v2.12.2"
 
 kustomize := localbin / "kustomize"
