@@ -39,6 +39,18 @@ const (
 	ForwarderProtocolQUIC  ForwarderProtocol = "Quic"
 )
 
+// DeletionPolicy controls the fate of the server-side zone when a Zone resource
+// is deleted.
+// +kubebuilder:validation:Enum=Delete;Orphan
+type DeletionPolicy string
+
+const (
+	// DeletionPolicyDelete removes the zone from the Technitium server on delete.
+	DeletionPolicyDelete DeletionPolicy = "Delete"
+	// DeletionPolicyOrphan leaves the server-side zone in place on delete.
+	DeletionPolicyOrphan DeletionPolicy = "Orphan"
+)
+
 // ZoneSpec defines the desired state of Zone.
 type ZoneSpec struct {
 	// zoneName is the fully qualified DNS name of the zone, for example
@@ -78,6 +90,14 @@ type ZoneSpec struct {
 	// member. Applies to Primary, Secondary, Stub, and Forwarder zones.
 	// +optional
 	Catalog *string `json:"catalog,omitempty"`
+
+	// deletionPolicy controls what happens to the server-side zone when this
+	// resource is deleted. "Delete" (the default) removes the zone from the
+	// Technitium server. "Orphan" leaves the server zone intact and only clears
+	// the finalizer, which is useful for safe adoption or migration.
+	// +kubebuilder:default=Delete
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // ZoneStatus defines the observed state of Zone.
