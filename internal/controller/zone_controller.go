@@ -9,7 +9,12 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"strings"
+	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -19,13 +24,31 @@ import (
 	"github.com/charg/technitium-operator/internal/technitium"
 )
 
+// driftReconcileInterval is how long to wait before re-reconciling a healthy
+// zone. Technitium options can be changed out of band (another operator, the web
+// console), so the controller polls periodically to correct drift.
+const driftReconcileInterval = 5 * time.Minute
+
+// conditionAvailable is set True once the zone matches its spec on the server and
+// False when a reconcile fails.
+const conditionAvailable = "Available"
+
+// ZoneAPI is the subset of the Technitium client the reconciler depends on.
+// Depending on the interface rather than the concrete client keeps the
+// reconciliation logic testable with a fake server.
+type ZoneAPI interface {
+	CreateZone(ctx context.Context, opts technitium.CreateZoneOptions) error
+	GetZoneOptions(ctx context.Context, zone string) (*technitium.ZoneOptions, error)
+	SetZoneOptions(ctx context.Context, zone string, opts technitium.ZoneOptionsUpdate) error
+}
+
 // ZoneReconciler reconciles a Zone object
 type ZoneReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// Technitium is the client used to reconcile zones against the DNS server. It
-	// is constructed once at startup and shared across reconciles.
-	Technitium *technitium.Client
+	// Technitium reconciles zones against the DNS server. It is constructed once
+	// at startup and shared across reconciles.
+	Technitium ZoneAPI
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones,verbs=get;list;watch;create;update;patch;delete
@@ -33,21 +56,161 @@ type ZoneReconciler struct {
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Zone object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.24.1/pkg/reconcile
+// Reconcile ensures the Technitium zone matches the Zone spec: it creates the
+// zone when absent and corrects detectable option drift when present.
 func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	log := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	var zone dnsv1alpha1.Zone
+	if err := r.Get(ctx, req.NamespacedName, &zone); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
 
-	return ctrl.Result{}, nil
+	if err := r.reconcileZone(ctx, &zone); err != nil {
+		log.Error(err, "Failed to reconcile Zone", "zone", zone.Spec.ZoneName)
+		if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
+			log.Error(statusErr, "Failed to update Zone status", "zone", zone.Spec.ZoneName)
+		}
+		return ctrl.Result{}, err
+	}
+
+	if err := r.markAvailable(ctx, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{RequeueAfter: driftReconcileInterval}, nil
+}
+
+// reconcileZone brings the server-side zone in line with the spec. It is
+// idempotent: an absent zone is created, an existing "already exists" is a
+// success, and a present zone has its detectable options corrected.
+func (r *ZoneReconciler) reconcileZone(ctx context.Context, zone *dnsv1alpha1.Zone) error {
+	log := logf.FromContext(ctx)
+	name := zone.Spec.ZoneName
+
+	current, err := r.Technitium.GetZoneOptions(ctx, name)
+	switch {
+	case err == nil:
+		return r.reconcileOptions(ctx, zone, current)
+	case !errors.Is(err, technitium.ErrZoneNotFound):
+		return err
+	}
+
+	if err := r.Technitium.CreateZone(ctx, createOptionsFromSpec(zone)); err != nil {
+		// A concurrent create (another replica, a manual action) races us to the
+		// same zone; treat that as the success it effectively is.
+		if !errors.Is(err, technitium.ErrZoneAlreadyExists) {
+			return err
+		}
+		return nil
+	}
+
+	log.Info("Created Zone", "zone", name, "type", zone.Spec.Type)
+	return nil
+}
+
+// reconcileOptions corrects drift on a zone that already exists. Only options the
+// server reports back through GetZoneOptions can be reconciled.
+func (r *ZoneReconciler) reconcileOptions(ctx context.Context, zone *dnsv1alpha1.Zone, current *technitium.ZoneOptions) error {
+	log := logf.FromContext(ctx)
+	name := zone.Spec.ZoneName
+
+	// Technitium cannot change a live zone's type. Surface the mismatch so an
+	// operator can delete and recreate rather than have it silently ignored.
+	if desired := string(zone.Spec.Type); desired != "" && !strings.EqualFold(current.Type, desired) {
+		log.Info("Zone type differs from spec and cannot be changed in place",
+			"zone", name, "current", current.Type, "desired", desired)
+	}
+
+	var update technitium.ZoneOptionsUpdate
+	if zone.Spec.Catalog != nil && current.Catalog != *zone.Spec.Catalog {
+		update.Catalog = zone.Spec.Catalog
+	}
+
+	if update == (technitium.ZoneOptionsUpdate{}) {
+		return nil
+	}
+
+	if err := r.Technitium.SetZoneOptions(ctx, name, update); err != nil {
+		return err
+	}
+
+	log.Info("Updated Zone options", "zone", name)
+	return nil
+}
+
+// createOptionsFromSpec maps a Zone spec onto the create-zone parameters. Forwarder
+// and catalog fields are only set when present in the spec so the server applies
+// its own defaults otherwise.
+func createOptionsFromSpec(zone *dnsv1alpha1.Zone) technitium.CreateZoneOptions {
+	spec := zone.Spec
+	opts := technitium.CreateZoneOptions{
+		Zone:                       spec.ZoneName,
+		Type:                       string(spec.Type),
+		PrimaryNameServerAddresses: spec.PrimaryNameServerAddresses,
+	}
+	if spec.Forwarder != nil {
+		opts.Forwarder = *spec.Forwarder
+	}
+	if spec.ForwarderProtocol != nil {
+		opts.Protocol = string(*spec.ForwarderProtocol)
+	}
+	if spec.Catalog != nil {
+		opts.Catalog = *spec.Catalog
+	}
+	return opts
+}
+
+// markAvailable re-fetches the Zone and records a successful reconcile. Re-fetching
+// avoids writing status onto a stale object that another writer has since changed.
+func (r *ZoneReconciler) markAvailable(ctx context.Context, key client.ObjectKey) error {
+	var zone dnsv1alpha1.Zone
+	if err := r.Get(ctx, key, &zone); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	// Only write status when something actually changed. A blind Update on every
+	// requeue would bump resourceVersion and fire a watch event each drift tick
+	// even when the zone is already in the desired state.
+	changed := meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
+		Type:               conditionAvailable,
+		Status:             metav1.ConditionTrue,
+		Reason:             "ZoneReady",
+		Message:            "Zone reconciled on the Technitium server",
+		ObservedGeneration: zone.Generation,
+	})
+	if zone.Status.ObservedGeneration != zone.Generation {
+		zone.Status.ObservedGeneration = zone.Generation
+		changed = true
+	}
+	if !zone.Status.ZoneCreated {
+		zone.Status.ZoneCreated = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+
+	return r.Status().Update(ctx, &zone)
+}
+
+// markDegraded re-fetches the Zone and records a failed reconcile so the failure
+// is visible on the resource and not only in the logs.
+func (r *ZoneReconciler) markDegraded(ctx context.Context, key client.ObjectKey, cause error) error {
+	var zone dnsv1alpha1.Zone
+	if err := r.Get(ctx, key, &zone); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
+		Type:               conditionAvailable,
+		Status:             metav1.ConditionFalse,
+		Reason:             "ReconcileFailed",
+		Message:            cause.Error(),
+		ObservedGeneration: zone.Generation,
+	})
+
+	return r.Status().Update(ctx, &zone)
 }
 
 // SetupWithManager sets up the controller with the Manager.

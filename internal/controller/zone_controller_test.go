@@ -9,68 +9,231 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+	"github.com/charg/technitium-operator/internal/technitium"
 )
+
+// fakeZoneAPI records the calls the reconciler makes and returns programmed
+// results, standing in for a live Technitium server.
+type fakeZoneAPI struct {
+	getOptions func(zone string) (*technitium.ZoneOptions, error)
+	createErr  error
+	setErr     error
+
+	createCalls []technitium.CreateZoneOptions
+	setCalls    []technitium.ZoneOptionsUpdate
+}
+
+func (f *fakeZoneAPI) CreateZone(_ context.Context, opts technitium.CreateZoneOptions) error {
+	f.createCalls = append(f.createCalls, opts)
+	return f.createErr
+}
+
+func (f *fakeZoneAPI) GetZoneOptions(_ context.Context, zone string) (*technitium.ZoneOptions, error) {
+	return f.getOptions(zone)
+}
+
+func (f *fakeZoneAPI) SetZoneOptions(_ context.Context, _ string, opts technitium.ZoneOptionsUpdate) error {
+	f.setCalls = append(f.setCalls, opts)
+	return f.setErr
+}
+
+// notFound is a GetZoneOptions stub for a zone the server does not have.
+func notFound(string) (*technitium.ZoneOptions, error) {
+	return nil, fmt.Errorf("%w: no such zone", technitium.ErrZoneNotFound)
+}
 
 var _ = Describe("Zone Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
+		const zoneName = "example.com"
 
 		ctx := context.Background()
 
 		// Zone is cluster-scoped, so the lookup key carries no namespace.
-		typeNamespacedName := types.NamespacedName{
-			Name: resourceName,
-		}
-		zone := &dnsv1alpha1.Zone{}
+		key := types.NamespacedName{Name: resourceName}
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind Zone")
-			err := k8sClient.Get(ctx, typeNamespacedName, zone)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &dnsv1alpha1.Zone{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: resourceName,
-					},
-					Spec: dnsv1alpha1.ZoneSpec{
-						ZoneName: "example.com",
-					},
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+		newReconciler := func(api *fakeZoneAPI) *ZoneReconciler {
+			return &ZoneReconciler{
+				Client:     k8sClient,
+				Scheme:     k8sClient.Scheme(),
+				Technitium: api,
 			}
-		})
+		}
+
+		createZoneCR := func(mutate func(*dnsv1alpha1.Zone)) {
+			resource := &dnsv1alpha1.Zone{
+				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Spec:       dnsv1alpha1.ZoneSpec{ZoneName: zoneName},
+			}
+			if mutate != nil {
+				mutate(resource)
+			}
+			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+		}
 
 		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &dnsv1alpha1.Zone{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
+			if err := k8sClient.Get(ctx, key, resource); err == nil {
+				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			}
+		})
+
+		It("returns without error when the Zone was deleted", func() {
+			api := &fakeZoneAPI{getOptions: notFound}
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.createCalls).To(BeEmpty())
+		})
+
+		It("creates the zone on the server when it is absent", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{getOptions: notFound}
+
+			result, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(driftReconcileInterval))
+
+			Expect(api.createCalls).To(HaveLen(1))
+			Expect(api.createCalls[0].Zone).To(Equal(zoneName))
+			Expect(api.createCalls[0].Type).To(Equal(string(dnsv1alpha1.ZoneTypePrimary)))
+
+			zone := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, zone)).To(Succeed())
+			Expect(zone.Status.ZoneCreated).To(BeTrue())
+			Expect(zone.Status.ObservedGeneration).To(Equal(zone.Generation))
+			Expect(meta.IsStatusConditionTrue(zone.Status.Conditions, conditionAvailable)).To(BeTrue())
+		})
+
+		It("passes forwarder and catalog options through on create", func() {
+			forwarder := "1.1.1.1"
+			catalog := "shared"
+			protocol := dnsv1alpha1.ForwarderProtocolHTTPS
+			createZoneCR(func(z *dnsv1alpha1.Zone) {
+				z.Spec.ZoneName = "fwd.example.com"
+				z.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+				z.Spec.Forwarder = &forwarder
+				z.Spec.ForwarderProtocol = &protocol
+				z.Spec.Catalog = &catalog
+			})
+			api := &fakeZoneAPI{getOptions: notFound}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Cleanup the specific resource instance Zone")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			Expect(api.createCalls).To(HaveLen(1))
+			Expect(api.createCalls[0].Forwarder).To(Equal(forwarder))
+			Expect(api.createCalls[0].Protocol).To(Equal(string(protocol)))
+			Expect(api.createCalls[0].Catalog).To(Equal(catalog))
 		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &ZoneReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+
+		It("treats an already-existing zone on create as success", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{
+				getOptions: notFound,
+				createErr:  fmt.Errorf("%w: example.com", technitium.ErrZoneAlreadyExists),
 			}
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+
+			zone := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, zone)).To(Succeed())
+			Expect(zone.Status.ZoneCreated).To(BeTrue())
 		})
+
+		It("makes no changes when an existing zone already matches", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{
+				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
+					return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary)}, nil
+				},
+			}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.createCalls).To(BeEmpty())
+			Expect(api.setCalls).To(BeEmpty())
+		})
+
+		It("does not rewrite status on a repeat reconcile of a matching zone", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{
+				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
+					return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary)}, nil
+				},
+			}
+			reconciler := newReconciler(api)
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			first := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, first)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			second := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, second)).To(Succeed())
+			Expect(second.ResourceVersion).To(Equal(first.ResourceVersion))
+		})
+
+		It("corrects catalog drift on an existing zone", func() {
+			catalog := "shared"
+			createZoneCR(func(z *dnsv1alpha1.Zone) { z.Spec.Catalog = &catalog })
+			api := &fakeZoneAPI{
+				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
+					return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary), Catalog: "stale"}, nil
+				},
+			}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.createCalls).To(BeEmpty())
+			Expect(api.setCalls).To(HaveLen(1))
+			Expect(api.setCalls[0].Catalog).NotTo(BeNil())
+			Expect(*api.setCalls[0].Catalog).To(Equal(catalog))
+		})
+
+		It("surfaces and records an error when the server call fails", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{
+				getOptions: notFound,
+				createErr:  fmt.Errorf("server unreachable"),
+			}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).To(HaveOccurred())
+
+			zone := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, zone)).To(Succeed())
+			cond := meta.FindStatusCondition(zone.Status.Conditions, conditionAvailable)
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		})
+	})
+})
+
+var _ = Describe("createOptionsFromSpec", func() {
+	It("omits forwarder fields when unset", func() {
+		zone := &dnsv1alpha1.Zone{Spec: dnsv1alpha1.ZoneSpec{
+			ZoneName: "example.com",
+			Type:     dnsv1alpha1.ZoneTypePrimary,
+		}}
+		opts := createOptionsFromSpec(zone)
+		Expect(opts.Forwarder).To(BeEmpty())
+		Expect(opts.Protocol).To(BeEmpty())
+		Expect(opts.Catalog).To(BeEmpty())
 	})
 })
