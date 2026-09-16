@@ -310,8 +310,7 @@ func assertErr(t *testing.T, err error, wantErrIs error, body string) {
 			t.Fatalf("err = %v, want errors.Is %v", err, wantErrIs)
 		}
 	case isErrorBody(body):
-		var apiErr *APIError
-		if !errors.As(err, &apiErr) {
+		if _, ok := errors.AsType[*APIError](err); !ok {
 			t.Fatalf("err = %v, want *APIError", err)
 		}
 	default:

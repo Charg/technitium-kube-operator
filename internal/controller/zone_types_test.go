@@ -12,7 +12,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 )
@@ -24,8 +23,8 @@ var _ = Describe("Zone CRD validation", func() {
 
 	newZone := func(name string) *dnsv1alpha1.Zone {
 		return &dnsv1alpha1.Zone{
-			ObjectMeta: metav1.ObjectMeta{Name: name},
-			Spec:       dnsv1alpha1.ZoneSpec{ZoneName: name + ".example.com"},
+			Name: name,
+			Spec: dnsv1alpha1.ZoneSpec{ZoneName: name + ".example.com"},
 		}
 	}
 
@@ -38,14 +37,14 @@ var _ = Describe("Zone CRD validation", func() {
 	})
 
 	It("rejects a zone with no zoneName", func() {
-		zone := &dnsv1alpha1.Zone{ObjectMeta: metav1.ObjectMeta{Name: "no-name"}}
+		zone := &dnsv1alpha1.Zone{Name: "no-name"}
 		Expect(k8sClient.Create(ctx, zone)).NotTo(Succeed())
 	})
 
 	It("rejects a zoneName that is not a DNS name", func() {
 		zone := &dnsv1alpha1.Zone{
-			ObjectMeta: metav1.ObjectMeta{Name: "bad-name"},
-			Spec:       dnsv1alpha1.ZoneSpec{ZoneName: "not a dns name"},
+			Name: "bad-name",
+			Spec: dnsv1alpha1.ZoneSpec{ZoneName: "not a dns name"},
 		}
 		Expect(k8sClient.Create(ctx, zone)).NotTo(Succeed())
 	})
