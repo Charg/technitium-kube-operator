@@ -65,6 +65,12 @@ metadata:
     {{- include "technitium-operator.labels" . | nindent 4 }}
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
   - dns.packet.fail
   resources:
   - zones

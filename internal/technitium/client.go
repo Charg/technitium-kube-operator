@@ -106,6 +106,12 @@ func NewClient(baseURL string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// Token returns the API token currently held by the client. It is empty until
+// a token is supplied via WithToken or obtained through Login.
+func (c *Client) Token() string {
+	return c.token
+}
+
 // Login exchanges the stored username and password for an API token, stores it
 // for subsequent calls, and returns it. Requires WithCredentials.
 func (c *Client) Login(ctx context.Context) (string, error) {
