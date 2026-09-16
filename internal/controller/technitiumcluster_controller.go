@@ -1,0 +1,477 @@
+/*
+Copyright (c) 2026 Chris
+
+Licensed under the MIT License. See the LICENSE file in the project root for
+the full license text.
+*/
+
+package controller
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+)
+
+// clusterPollInterval is how often a not-yet-ready workload is re-checked.
+// It is short because readiness only shows up once kubelet reports the pod
+// ready, and we want that observed quickly rather than on the drift cadence.
+const clusterPollInterval = 15 * time.Second
+
+// clusterDriftInterval is how long to wait before re-reconciling a workload
+// that is already up. Hand edits to the Deployment or Services (kubectl edit,
+// another controller) are only corrected on this cadence.
+const clusterDriftInterval = 5 * time.Minute
+
+// adminSecretUsernameKey and adminSecretPasswordKey are the keys the operator
+// writes into the generated admin Secret. internal/config/credentials.go reads
+// the same keys off whatever Secret the Technitium client is configured with.
+const (
+	adminSecretUsernameKey = "username"
+	adminSecretPasswordKey = "password"
+)
+
+// TechnitiumClusterReconciler provisions and drift-corrects the workload
+// backing a TechnitiumCluster: a StatefulSet, a client Service, a headless
+// Service, and (unless spec.adminSecretRef is set) a generated admin Secret.
+//
+// TechnitiumCluster is cluster-scoped but its owned objects are namespaced, so
+// they are created in the operator's own namespace rather than alongside the
+// CR. A cluster-scoped owner can still own namespaced dependents in any
+// namespace, so controllerutil.SetControllerReference on each object is
+// enough for owner-reference garbage collection to tear them down when the CR
+// is deleted; no finalizer is needed.
+type TechnitiumClusterReconciler struct {
+	client.Client
+	Scheme *runtime.Scheme
+	// OperatorNamespace is where the owned StatefulSet, Services, and Secret
+	// are created. It is the operator's own namespace (POD_NAMESPACE), not the
+	// CR's, since the CR itself has no namespace to borrow.
+	OperatorNamespace string
+}
+
+// +kubebuilder:rbac:groups=dns.packet.fail,resources=technitiumclusters,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=dns.packet.fail,resources=technitiumclusters/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=dns.packet.fail,resources=technitiumclusters/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=services;persistentvolumeclaims;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+
+// Reconcile provisions the Technitium workload for a TechnitiumCluster and
+// corrects drift on it. Token minting and the transition to phase Ready are
+// deferred to a follow-up controller (ticket #43).
+func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	var tc dnsv1alpha1.TechnitiumCluster
+	if err := r.Get(ctx, req.NamespacedName, &tc); err != nil {
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	sts, err := r.reconcileWorkload(ctx, &tc)
+	if err != nil {
+		log.Error(err, "Failed to reconcile TechnitiumCluster workload", "cluster", tc.Name)
+		if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
+			log.Error(statusErr, "Failed to update TechnitiumCluster status", "cluster", tc.Name)
+		}
+		return ctrl.Result{}, err
+	}
+
+	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// reconcileWorkload brings the headless Service, client Service, admin
+// Secret, and StatefulSet in line with the spec, creating anything absent. It
+// returns the reconciled StatefulSet so the caller can read its observed
+// readyReplicas without a second fetch.
+func (r *TechnitiumClusterReconciler) reconcileWorkload(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*appsv1.StatefulSet, error) {
+	if err := r.reconcileHeadlessService(ctx, tc); err != nil {
+		return nil, fmt.Errorf("reconciling headless service: %w", err)
+	}
+	if err := r.reconcileClientService(ctx, tc); err != nil {
+		return nil, fmt.Errorf("reconciling client service: %w", err)
+	}
+	// A caller-supplied adminSecretRef means the credentials are managed
+	// outside this controller; generating one anyway would fight whatever
+	// owns that Secret.
+	if tc.Spec.AdminSecretRef == nil {
+		if err := r.reconcileAdminSecret(ctx, tc); err != nil {
+			return nil, fmt.Errorf("reconciling admin secret: %w", err)
+		}
+	}
+	sts, err := r.reconcileStatefulSet(ctx, tc)
+	if err != nil {
+		return nil, fmt.Errorf("reconciling statefulset: %w", err)
+	}
+	return sts, nil
+}
+
+// instanceLabels is the selector subset used on the StatefulSet, both
+// Services, and the pod template: it is what ties a Service's endpoints and a
+// StatefulSet's owned Pods to this particular TechnitiumCluster.
+func instanceLabels(name string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":     "technitium",
+		"app.kubernetes.io/instance": name,
+	}
+}
+
+// commonLabels extends instanceLabels with the managed-by label applied to
+// every owned object, selector and non-selector fields alike.
+func commonLabels(name string) map[string]string {
+	labels := instanceLabels(name)
+	labels["app.kubernetes.io/managed-by"] = "technitium-operator"
+	return labels
+}
+
+func statefulSetName(clusterName string) string   { return clusterName }
+func clientServiceName(clusterName string) string { return clusterName }
+func headlessServiceName(clusterName string) string {
+	return clusterName + "-headless"
+}
+func adminSecretName(clusterName string) string { return clusterName + "-admin" }
+
+// resolvedAdminSecretName is the Secret the StatefulSet mounts for the admin
+// password: the generated "<name>-admin" Secret, or spec.adminSecretRef when
+// set. A Secret volume can only reference one in the pod's own namespace, so
+// adminSecretRef.Namespace is resolved only for documentation/validation
+// purposes elsewhere; the mount always resolves within OperatorNamespace.
+func resolvedAdminSecretName(tc *dnsv1alpha1.TechnitiumCluster) string {
+	if tc.Spec.AdminSecretRef != nil {
+		return tc.Spec.AdminSecretRef.Name
+	}
+	return adminSecretName(tc.Name)
+}
+
+// reconcileHeadlessService ensures the StatefulSet's governing Service
+// exists. ClusterIP is only set on creation because it is immutable once
+// assigned; leaving it alone on update avoids fighting the apiserver over a
+// field we do not actually need to correct.
+func (r *TechnitiumClusterReconciler) reconcileHeadlessService(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	svc := &corev1.Service{
+		Name:      headlessServiceName(tc.Name),
+		Namespace: r.OperatorNamespace}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		if err := controllerutil.SetControllerReference(tc, svc, r.Scheme); err != nil {
+			return err
+		}
+		svc.Labels = commonLabels(tc.Name)
+		if svc.CreationTimestamp.IsZero() {
+			svc.Spec.ClusterIP = corev1.ClusterIPNone
+		}
+		svc.Spec.Selector = instanceLabels(tc.Name)
+		svc.Spec.Ports = dnsServicePorts()
+		return nil
+	})
+	return err
+}
+
+// reconcileClientService ensures the Service clients and Zone resources
+// reach the instance through. Type and annotations come from spec so an
+// operator can front the instance with a LoadBalancer or wire up
+// external-dns without editing the Service by hand.
+func (r *TechnitiumClusterReconciler) reconcileClientService(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	svc := &corev1.Service{
+		Name:      clientServiceName(tc.Name),
+		Namespace: r.OperatorNamespace}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		if err := controllerutil.SetControllerReference(tc, svc, r.Scheme); err != nil {
+			return err
+		}
+		svc.Labels = commonLabels(tc.Name)
+		svc.Annotations = tc.Spec.Service.Annotations
+		if tc.Spec.Service.Type != "" {
+			svc.Spec.Type = tc.Spec.Service.Type
+		}
+		svc.Spec.Selector = instanceLabels(tc.Name)
+		svc.Spec.Ports = dnsServicePorts()
+		return nil
+	})
+	return err
+}
+
+// dnsServicePorts is the port set shared by both Services: DNS over UDP and
+// TCP, plus the Technitium web/API port.
+func dnsServicePorts() []corev1.ServicePort {
+	return []corev1.ServicePort{
+		{Name: "dns-udp", Port: 53, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt32(53)},
+		{Name: "dns-tcp", Port: 53, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(53)},
+		{Name: "api", Port: 5380, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(5380)},
+	}
+}
+
+// reconcileAdminSecret ensures the generated admin credentials Secret exists.
+// It never regenerates an existing password and never touches a "token" key,
+// since ticket #43's bootstrap flow writes that key once it mints one; wiping
+// either on a routine reconcile would invalidate a session the server already
+// issued.
+func (r *TechnitiumClusterReconciler) reconcileAdminSecret(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	secret := &corev1.Secret{
+		Name:      adminSecretName(tc.Name),
+		Namespace: r.OperatorNamespace}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		if err := controllerutil.SetControllerReference(tc, secret, r.Scheme); err != nil {
+			return err
+		}
+		secret.Labels = commonLabels(tc.Name)
+		secret.Type = corev1.SecretTypeOpaque
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		if _, ok := secret.Data[adminSecretUsernameKey]; !ok {
+			secret.Data[adminSecretUsernameKey] = []byte("admin")
+		}
+		if _, ok := secret.Data[adminSecretPasswordKey]; !ok {
+			password, err := generatePassword()
+			if err != nil {
+				return fmt.Errorf("generating admin password: %w", err)
+			}
+			secret.Data[adminSecretPasswordKey] = []byte(password)
+		}
+		return nil
+	})
+	return err
+}
+
+// generatePassword produces a 32-byte random value hex-encoded for safe use
+// in an environment file mounted from a Secret.
+func generatePassword() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// reconcileStatefulSet ensures the StatefulSet running Technitium exists and
+// matches spec. Only replicas and the pod template are re-asserted on update:
+// selector, serviceName, and volumeClaimTemplates are immutable once the
+// StatefulSet is created, so touching them again would just turn a routine
+// drift-correction into a failed update.
+func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*appsv1.StatefulSet, error) {
+	sts := &appsv1.StatefulSet{
+		Name:      statefulSetName(tc.Name),
+		Namespace: r.OperatorNamespace}
+
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
+		if err := controllerutil.SetControllerReference(tc, sts, r.Scheme); err != nil {
+			return err
+		}
+		sts.Labels = commonLabels(tc.Name)
+
+		replicas := int32(1)
+		if tc.Spec.Replicas != nil {
+			replicas = *tc.Spec.Replicas
+		}
+		sts.Spec.Replicas = &replicas
+		sts.Spec.Template = podTemplateFor(tc)
+
+		if sts.CreationTimestamp.IsZero() {
+			sts.Spec.ServiceName = headlessServiceName(tc.Name)
+			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: instanceLabels(tc.Name)}
+			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{volumeClaimTemplateFor(tc)}
+		}
+		return nil
+	})
+	return sts, err
+}
+
+// podTemplateFor builds the Technitium pod template from spec. It is rebuilt
+// in full on every reconcile so hand-edited images, resources, or env vars
+// are corrected back to spec.
+func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
+	env := []corev1.EnvVar{
+		// The web console's own password prompt is for interactive use;
+		// pointing the server at a file lets it pick up the admin password
+		// from the mounted Secret without it ever appearing in the Pod spec
+		// or logs.
+		{Name: "DNS_SERVER_ADMIN_PASSWORD_FILE", Value: "/etc/technitium/admin/password"},
+	}
+	if tc.Spec.DNSServerDomain != "" {
+		env = append(env, corev1.EnvVar{Name: "DNS_SERVER_DOMAIN", Value: tc.Spec.DNSServerDomain})
+	}
+
+	probe := &corev1.Probe{
+		// An HTTP path probe is unreliable here: Technitium's root path
+		// redirects, and kubelet does not follow redirects when scoring probe
+		// success. A bare TCP check on the web API port is a reliable proxy
+		// for "the server process is up and listening".
+		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(5380)},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       10,
+	}
+
+	return corev1.PodTemplateSpec{
+		Labels: commonLabels(tc.Name),
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  "dns-server",
+					Image: tc.Spec.Image,
+					Ports: []corev1.ContainerPort{
+						{Name: "dns-udp", ContainerPort: 53, Protocol: corev1.ProtocolUDP},
+						{Name: "dns-tcp", ContainerPort: 53, Protocol: corev1.ProtocolTCP},
+						{Name: "api", ContainerPort: 5380, Protocol: corev1.ProtocolTCP},
+					},
+					Env:       env,
+					Resources: tc.Spec.Resources,
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: "data", MountPath: "/etc/dns"},
+						{Name: "admin", MountPath: "/etc/technitium/admin", ReadOnly: true},
+					},
+					ReadinessProbe: probe,
+					LivenessProbe:  probe,
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "admin",
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: resolvedAdminSecretName(tc),
+						Items: []corev1.KeyToPath{
+							{Key: adminSecretPasswordKey, Path: "password"},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// volumeClaimTemplateFor builds the "data" volume claim template, sized and
+// classed from spec.storage. It is only applied at StatefulSet creation time:
+// volumeClaimTemplates cannot be changed on an existing StatefulSet.
+func volumeClaimTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PersistentVolumeClaim {
+	return corev1.PersistentVolumeClaim{
+		Name: "data", Labels: commonLabels(tc.Name),
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: tc.Spec.Storage.Size},
+			},
+			StorageClassName: tc.Spec.Storage.StorageClassName,
+		},
+	}
+}
+
+// updateStatus re-fetches the TechnitiumCluster and records the observed
+// workload state: endpoint, ready replicas, phase, and conditions. It reports
+// the requeue interval to use next: short while the workload is still coming
+// up, long once it is fully provisioned, since readiness is only worth
+// polling for quickly in the former case.
+func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet) (time.Duration, error) {
+	var tc dnsv1alpha1.TechnitiumCluster
+	if err := r.Get(ctx, key, &tc); err != nil {
+		return 0, client.IgnoreNotFound(err)
+	}
+
+	desiredReplicas := int32(1)
+	if tc.Spec.Replicas != nil {
+		desiredReplicas = *tc.Spec.Replicas
+	}
+	readyReplicas := sts.Status.ReadyReplicas
+	endpoint := fmt.Sprintf("http://%s.%s.svc:5380", tc.Name, r.OperatorNamespace)
+
+	changed := false
+	if tc.Status.Endpoint != endpoint {
+		tc.Status.Endpoint = endpoint
+		changed = true
+	}
+	if tc.Status.ReadyReplicas != readyReplicas {
+		tc.Status.ReadyReplicas = readyReplicas
+		changed = true
+	}
+	if tc.Status.ObservedGeneration != tc.Generation {
+		tc.Status.ObservedGeneration = tc.Generation
+		changed = true
+	}
+
+	// Token minting and the Ready transition land in ticket #43, so a fully
+	// provisioned workload here still reports not-Available: Bootstrapping is
+	// the honest terminal state for this controller alone.
+	phase := dnsv1alpha1.TechnitiumClusterPhaseProvisioning
+	reason := "WorkloadProvisioning"
+	message := "Waiting for the StatefulSet to report ready replicas"
+	requeueAfter := clusterPollInterval
+	if readyReplicas >= desiredReplicas {
+		phase = dnsv1alpha1.TechnitiumClusterPhaseBootstrapping
+		reason = "AwaitingBootstrap"
+		message = "Workload is ready; awaiting admin token bootstrap"
+		requeueAfter = clusterDriftInterval
+	}
+
+	if tc.Status.Phase != phase {
+		tc.Status.Phase = phase
+		changed = true
+	}
+
+	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionTrue, reason, message) || changed
+	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, reason, message) || changed
+	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionFalse, reason, message) || changed
+
+	if !changed {
+		return requeueAfter, nil
+	}
+	return requeueAfter, r.Status().Update(ctx, &tc)
+}
+
+// markDegraded re-fetches the TechnitiumCluster and records a failed
+// reconcile so the failure is visible on the resource, not only in the logs.
+func (r *TechnitiumClusterReconciler) markDegraded(ctx context.Context, key client.ObjectKey, cause error) error {
+	var tc dnsv1alpha1.TechnitiumCluster
+	if err := r.Get(ctx, key, &tc); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, "ReconcileFailed", cause.Error())
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
+
+	return r.Status().Update(ctx, &tc)
+}
+
+// setClusterCondition upserts a status condition stamped with the cluster's
+// current generation and reports whether it changed anything.
+func setClusterCondition(tc *dnsv1alpha1.TechnitiumCluster, condType string, status metav1.ConditionStatus, reason, message string) bool {
+	return meta.SetStatusCondition(&tc.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: tc.Generation,
+	})
+}
+
+// SetupWithManager sets up the controller with the Manager.
+func (r *TechnitiumClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&dnsv1alpha1.TechnitiumCluster{}).
+		Owns(&appsv1.StatefulSet{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.Secret{}).
+		Named("technitiumcluster").
+		Complete(r)
+}

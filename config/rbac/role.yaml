@@ -7,9 +7,63 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
   - secrets
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
   verbs:
   - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dns.packet.fail
+  resources:
+  - technitiumclusters
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dns.packet.fail
+  resources:
+  - technitiumclusters/finalizers
+  - zones/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - dns.packet.fail
+  resources:
+  - technitiumclusters/status
+  - zones/status
+  verbs:
+  - get
+  - patch
+  - update
 - apiGroups:
   - dns.packet.fail
   resources:
@@ -22,17 +76,3 @@ rules:
   - patch
   - update
   - watch
-- apiGroups:
-  - dns.packet.fail
-  resources:
-  - zones/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - dns.packet.fail
-  resources:
-  - zones/status
-  verbs:
-  - get
-  - patch
-  - update
