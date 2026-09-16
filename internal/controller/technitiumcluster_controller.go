@@ -26,6 +26,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+	"github.com/charg/technitium-operator/internal/technitium"
 )
 
 // clusterPollInterval is how often a not-yet-ready workload is re-checked.
@@ -44,7 +45,23 @@ const clusterDriftInterval = 5 * time.Minute
 const (
 	adminSecretUsernameKey = "username"
 	adminSecretPasswordKey = "password"
+	// adminSecretTokenKey is where ensureToken writes the minted API token
+	// once the instance is bootstrapped. Its presence is also the idempotency
+	// check: a non-empty token here means bootstrap already ran.
+	adminSecretTokenKey = "token"
 )
+
+// operatorTokenName is the tokenName the operator registers with Technitium
+// when minting its own API token, so it is identifiable (and revocable) in
+// the server's token list as distinct from any human-created token.
+const operatorTokenName = "technitium-operator"
+
+// bootstrapAPI is the slice of the Technitium client the bootstrap flow
+// needs. It exists so tests can substitute a fake client without spinning up
+// a real Technitium server.
+type bootstrapAPI interface {
+	CreateToken(ctx context.Context, tokenName string) (string, error)
+}
 
 // TechnitiumClusterReconciler provisions and drift-corrects the workload
 // backing a TechnitiumCluster: a StatefulSet, a client Service, a headless
@@ -63,6 +80,23 @@ type TechnitiumClusterReconciler struct {
 	// are created. It is the operator's own namespace (POD_NAMESPACE), not the
 	// CR's, since the CR itself has no namespace to borrow.
 	OperatorNamespace string
+	// NewBootstrapClient builds a client to a provisioned instance's API
+	// endpoint using its admin credentials. It is a seam so tests can inject
+	// a fake token endpoint; production wiring leaves it nil and
+	// bootstrapClientFactory supplies a real *technitium.Client.
+	NewBootstrapClient func(endpoint, username, password string) (bootstrapAPI, error)
+}
+
+// bootstrapClientFactory returns r.NewBootstrapClient, defaulting it to a
+// real Technitium client the first time it is needed. main.go leaves the
+// field nil, so production wiring never has to know about this seam.
+func (r *TechnitiumClusterReconciler) bootstrapClientFactory() func(endpoint, username, password string) (bootstrapAPI, error) {
+	if r.NewBootstrapClient != nil {
+		return r.NewBootstrapClient
+	}
+	return func(endpoint, username, password string) (bootstrapAPI, error) {
+		return technitium.NewClient(endpoint, technitium.WithCredentials(username, password))
+	}
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=technitiumclusters,verbs=get;list;watch;update;patch
@@ -72,9 +106,9 @@ type TechnitiumClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services;persistentvolumeclaims;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
-// Reconcile provisions the Technitium workload for a TechnitiumCluster and
-// corrects drift on it. Token minting and the transition to phase Ready are
-// deferred to a follow-up controller (ticket #43).
+// Reconcile provisions the Technitium workload for a TechnitiumCluster,
+// corrects drift on it, and once the workload is ready mints the durable
+// admin API token that carries the instance into phase Ready.
 func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -92,12 +126,102 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
-	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts)
+	desiredReplicas := int32(1)
+	if tc.Spec.Replicas != nil {
+		desiredReplicas = *tc.Spec.Replicas
+	}
+	readyReplicas := sts.Status.ReadyReplicas
+	endpoint := fmt.Sprintf("http://%s.%s.svc:5380", tc.Name, r.OperatorNamespace)
+
+	// Bootstrap only once the workload itself is up: minting against an
+	// endpoint with no listener behind it yet is a wasted round trip that
+	// updateStatus's short requeue will simply retry next poll anyway.
+	bootstrapped := false
+	if readyReplicas >= desiredReplicas {
+		bootstrapped, err = r.ensureToken(ctx, &tc, endpoint)
+		if err != nil {
+			log.Error(err, "Failed to bootstrap TechnitiumCluster admin token", "cluster", tc.Name)
+			if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
+				log.Error(statusErr, "Failed to update TechnitiumCluster status", "cluster", tc.Name)
+			}
+			return ctrl.Result{}, err
+		}
+	}
+
+	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts, endpoint, bootstrapped)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// ensureToken mints a durable API token for a bootstrapped instance and
+// stores it in the admin Secret's token key. It is idempotent: a Secret that
+// already carries a token is left untouched, since minting a second one
+// would not invalidate the first (Technitium tokens are independent, and
+// non-expiring) but would orphan whatever the Zone controller already holds
+// under the original.
+//
+// A failure from CreateToken itself (the server not accepting connections
+// yet, or the generated password not yet applied so the credentials are
+// rejected) is expected during the normal bootstrap window. It is logged
+// here and reported as "not yet bootstrapped" (false, nil) rather than
+// returned as an error, so Reconcile requeues the resource in phase
+// Bootstrapping instead of flapping it to Degraded on every poll until the
+// server catches up. Only a problem with the Secret itself, missing
+// entirely or missing the username/password keys the controller itself
+// wrote, is a hard error: that is a configuration fault requeuing will not
+// fix on its own.
+func (r *TechnitiumClusterReconciler) ensureToken(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, endpoint string) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	secretNamespace := r.OperatorNamespace
+	secretName := adminSecretName(tc.Name)
+	if tc.Spec.AdminSecretRef != nil {
+		secretName = tc.Spec.AdminSecretRef.Name
+		if tc.Spec.AdminSecretRef.Namespace != "" {
+			secretNamespace = tc.Spec.AdminSecretRef.Namespace
+		}
+	}
+	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
+
+	var secret corev1.Secret
+	if err := r.Get(ctx, secretKey, &secret); err != nil {
+		return false, fmt.Errorf("getting admin secret %s: %w", secretKey, err)
+	}
+
+	if len(secret.Data[adminSecretTokenKey]) > 0 {
+		return true, nil
+	}
+
+	username := secret.Data[adminSecretUsernameKey]
+	if len(username) == 0 {
+		return false, fmt.Errorf("admin secret %s has no %q key", secretKey, adminSecretUsernameKey)
+	}
+	password := secret.Data[adminSecretPasswordKey]
+	if len(password) == 0 {
+		return false, fmt.Errorf("admin secret %s has no %q key", secretKey, adminSecretPasswordKey)
+	}
+
+	apiClient, err := r.bootstrapClientFactory()(endpoint, string(username), string(password))
+	if err != nil {
+		return false, fmt.Errorf("building bootstrap client for %s: %w", endpoint, err)
+	}
+
+	token, err := apiClient.CreateToken(ctx, operatorTokenName)
+	if err != nil {
+		log.Info("Deferring admin token mint until the instance accepts the generated credentials",
+			"cluster", tc.Name, "endpoint", endpoint, "error", err.Error())
+		return false, nil
+	}
+
+	secret.Data[adminSecretTokenKey] = []byte(token)
+	if err := r.Update(ctx, &secret); err != nil {
+		return false, fmt.Errorf("writing admin token to secret %s: %w", secretKey, err)
+	}
+
+	return true, nil
 }
 
 // reconcileWorkload brings the headless Service, client Service, admin
@@ -380,9 +504,10 @@ func volumeClaimTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.Persistent
 // updateStatus re-fetches the TechnitiumCluster and records the observed
 // workload state: endpoint, ready replicas, phase, and conditions. It reports
 // the requeue interval to use next: short while the workload is still coming
-// up, long once it is fully provisioned, since readiness is only worth
-// polling for quickly in the former case.
-func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet) (time.Duration, error) {
+// up or still awaiting bootstrap, long once the instance is fully Ready,
+// since readiness and bootstrap progress are only worth polling for quickly
+// in the former cases.
+func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet, endpoint string, bootstrapped bool) (time.Duration, error) {
 	var tc dnsv1alpha1.TechnitiumCluster
 	if err := r.Get(ctx, key, &tc); err != nil {
 		return 0, client.IgnoreNotFound(err)
@@ -393,7 +518,6 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		desiredReplicas = *tc.Spec.Replicas
 	}
 	readyReplicas := sts.Status.ReadyReplicas
-	endpoint := fmt.Sprintf("http://%s.%s.svc:5380", tc.Name, r.OperatorNamespace)
 
 	changed := false
 	if tc.Status.Endpoint != endpoint {
@@ -409,17 +533,37 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		changed = true
 	}
 
-	// Token minting and the Ready transition land in ticket #43, so a fully
-	// provisioned workload here still reports not-Available: Bootstrapping is
-	// the honest terminal state for this controller alone.
-	phase := dnsv1alpha1.TechnitiumClusterPhaseProvisioning
-	reason := "WorkloadProvisioning"
-	message := "Waiting for the StatefulSet to report ready replicas"
-	requeueAfter := clusterPollInterval
-	if readyReplicas >= desiredReplicas {
+	var (
+		phase             dnsv1alpha1.TechnitiumClusterPhase
+		reason, message   string
+		availableStatus   metav1.ConditionStatus
+		progressingStatus metav1.ConditionStatus
+		requeueAfter      time.Duration
+	)
+	switch {
+	case readyReplicas < desiredReplicas:
+		phase = dnsv1alpha1.TechnitiumClusterPhaseProvisioning
+		reason = "WorkloadProvisioning"
+		message = "Waiting for the StatefulSet to report ready replicas"
+		availableStatus = metav1.ConditionFalse
+		progressingStatus = metav1.ConditionTrue
+		requeueAfter = clusterPollInterval
+	case !bootstrapped:
 		phase = dnsv1alpha1.TechnitiumClusterPhaseBootstrapping
 		reason = "AwaitingBootstrap"
-		message = "Workload is ready; awaiting admin token bootstrap"
+		message = "Workload is ready; minting the admin API token"
+		availableStatus = metav1.ConditionFalse
+		progressingStatus = metav1.ConditionTrue
+		// Short requeue: bootstrap converges as soon as the server picks up
+		// the generated admin password, which is typically seconds away
+		// once the pod itself is ready, not the drift-correction cadence.
+		requeueAfter = clusterPollInterval
+	default:
+		phase = dnsv1alpha1.TechnitiumClusterPhaseReady
+		reason = "InstanceReady"
+		message = "Workload is ready and the admin API token is bootstrapped"
+		availableStatus = metav1.ConditionTrue
+		progressingStatus = metav1.ConditionFalse
 		requeueAfter = clusterDriftInterval
 	}
 
@@ -428,8 +572,8 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		changed = true
 	}
 
-	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionTrue, reason, message) || changed
-	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, reason, message) || changed
+	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, progressingStatus, reason, message) || changed
+	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, availableStatus, reason, message) || changed
 	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionFalse, reason, message) || changed
 
 	if !changed {
