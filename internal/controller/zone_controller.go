@@ -29,9 +29,14 @@ import (
 // console), so the controller polls periodically to correct drift.
 const driftReconcileInterval = 5 * time.Minute
 
-// conditionAvailable is set True once the zone matches its spec on the server and
-// False when a reconcile fails.
-const conditionAvailable = "Available"
+// Condition types reported on a Zone's status. Ready is the summary users key on
+// (and the Ready printer column); Degraded carries the cause when a reconcile
+// fails; Progressing marks an in-flight create or update.
+const (
+	conditionReady       = "Ready"
+	conditionProgressing = "Progressing"
+	conditionDegraded    = "Degraded"
+)
 
 // ZoneAPI is the subset of the Technitium client the reconciler depends on.
 // Depending on the interface rather than the concrete client keeps the
@@ -74,7 +79,7 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	if err := r.markAvailable(ctx, req.NamespacedName); err != nil {
+	if err := r.markReady(ctx, req.NamespacedName); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -161,9 +166,10 @@ func createOptionsFromSpec(zone *dnsv1alpha1.Zone) technitium.CreateZoneOptions 
 	return opts
 }
 
-// markAvailable re-fetches the Zone and records a successful reconcile. Re-fetching
-// avoids writing status onto a stale object that another writer has since changed.
-func (r *ZoneReconciler) markAvailable(ctx context.Context, key client.ObjectKey) error {
+// markReady re-fetches the Zone and records a successful reconcile: Ready True,
+// Degraded and Progressing cleared. Re-fetching avoids writing status onto a stale
+// object that another writer has since changed.
+func (r *ZoneReconciler) markReady(ctx context.Context, key client.ObjectKey) error {
 	var zone dnsv1alpha1.Zone
 	if err := r.Get(ctx, key, &zone); err != nil {
 		return client.IgnoreNotFound(err)
@@ -172,13 +178,13 @@ func (r *ZoneReconciler) markAvailable(ctx context.Context, key client.ObjectKey
 	// Only write status when something actually changed. A blind Update on every
 	// requeue would bump resourceVersion and fire a watch event each drift tick
 	// even when the zone is already in the desired state.
-	changed := meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
-		Type:               conditionAvailable,
-		Status:             metav1.ConditionTrue,
-		Reason:             "ZoneReady",
-		Message:            "Zone reconciled on the Technitium server",
-		ObservedGeneration: zone.Generation,
-	})
+	changed := setCondition(&zone, conditionReady, metav1.ConditionTrue,
+		"ZoneReady", "Zone reconciled on the Technitium server")
+	changed = setCondition(&zone, conditionProgressing, metav1.ConditionFalse,
+		"ZoneReady", "Zone reconciled on the Technitium server") || changed
+	changed = setCondition(&zone, conditionDegraded, metav1.ConditionFalse,
+		"ZoneReady", "Zone reconciled on the Technitium server") || changed
+
 	if zone.Status.ObservedGeneration != zone.Generation {
 		zone.Status.ObservedGeneration = zone.Generation
 		changed = true
@@ -195,22 +201,31 @@ func (r *ZoneReconciler) markAvailable(ctx context.Context, key client.ObjectKey
 }
 
 // markDegraded re-fetches the Zone and records a failed reconcile so the failure
-// is visible on the resource and not only in the logs.
+// is visible on the resource and not only in the logs. Ready flips False and
+// Degraded True, both carrying the cause.
 func (r *ZoneReconciler) markDegraded(ctx context.Context, key client.ObjectKey, cause error) error {
 	var zone dnsv1alpha1.Zone
 	if err := r.Get(ctx, key, &zone); err != nil {
 		return client.IgnoreNotFound(err)
 	}
 
-	meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
-		Type:               conditionAvailable,
-		Status:             metav1.ConditionFalse,
-		Reason:             "ReconcileFailed",
-		Message:            cause.Error(),
-		ObservedGeneration: zone.Generation,
-	})
+	setCondition(&zone, conditionReady, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
+	setCondition(&zone, conditionProgressing, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
+	setCondition(&zone, conditionDegraded, metav1.ConditionTrue, "ReconcileFailed", cause.Error())
 
 	return r.Status().Update(ctx, &zone)
+}
+
+// setCondition upserts a status condition stamped with the zone's current
+// generation and reports whether it changed anything.
+func setCondition(zone *dnsv1alpha1.Zone, condType string, status metav1.ConditionStatus, reason, message string) bool {
+	return meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: zone.Generation,
+	})
 }
 
 // SetupWithManager sets up the controller with the Manager.

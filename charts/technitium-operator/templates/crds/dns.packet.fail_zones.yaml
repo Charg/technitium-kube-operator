@@ -26,9 +26,12 @@ spec:
     - jsonPath: .spec.type
       name: Type
       type: string
-    - jsonPath: .status.zoneCreated
-      name: Created
-      type: boolean
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -125,10 +128,10 @@ spec:
                   conditions represent the current state of the Zone resource.
                   Each condition has a unique type and reflects the status of a specific aspect of the resource.
 
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
+                  Condition types set by the controller:
+                  - "Ready": the zone exists on the server and matches the spec
+                  - "Progressing": the controller is creating or updating the zone
+                  - "Degraded": a reconcile failed, with the cause in reason/message
 
                   The status of each condition is one of True, False, or Unknown.
                 items:

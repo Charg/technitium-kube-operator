@@ -85,10 +85,10 @@ type ZoneStatus struct {
 	// conditions represent the current state of the Zone resource.
 	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
 	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
+	// Condition types set by the controller:
+	// - "Ready": the zone exists on the server and matches the spec
+	// - "Progressing": the controller is creating or updating the zone
+	// - "Degraded": a reconcile failed, with the cause in reason/message
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -113,7 +113,8 @@ type ZoneStatus struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=`.spec.zoneName`
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
-// +kubebuilder:printcolumn:name="Created",type=boolean,JSONPath=`.status.zoneCreated`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Zone is the Schema for the zones API.
 //
