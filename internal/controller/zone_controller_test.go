@@ -13,8 +13,10 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -29,9 +31,11 @@ type fakeZoneAPI struct {
 	getOptions func(zone string) (*technitium.ZoneOptions, error)
 	createErr  error
 	setErr     error
+	deleteErr  error
 
 	createCalls []technitium.CreateZoneOptions
 	setCalls    []technitium.ZoneOptionsUpdate
+	deleteCalls []string
 }
 
 func (f *fakeZoneAPI) CreateZone(_ context.Context, opts technitium.CreateZoneOptions) error {
@@ -46,6 +50,11 @@ func (f *fakeZoneAPI) GetZoneOptions(_ context.Context, zone string) (*technitiu
 func (f *fakeZoneAPI) SetZoneOptions(_ context.Context, _ string, opts technitium.ZoneOptionsUpdate) error {
 	f.setCalls = append(f.setCalls, opts)
 	return f.setErr
+}
+
+func (f *fakeZoneAPI) DeleteZone(_ context.Context, zone string) error {
+	f.deleteCalls = append(f.deleteCalls, zone)
+	return f.deleteErr
 }
 
 // notFound is a GetZoneOptions stub for a zone the server does not have.
@@ -84,9 +93,19 @@ var _ = Describe("Zone Controller", func() {
 
 		AfterEach(func() {
 			resource := &dnsv1alpha1.Zone{}
-			if err := k8sClient.Get(ctx, key, resource); err == nil {
-				Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+			if err := k8sClient.Get(ctx, key, resource); err != nil {
+				return
 			}
+			// Drop any finalizer with a merge patch so cleanup does not wedge on
+			// server-side deletion a test left pending, then best-effort delete.
+			// A merge patch avoids resourceVersion conflicts, and removing the
+			// finalizer on an already-deleting object garbage-collects it.
+			if len(resource.Finalizers) > 0 {
+				patch := client.MergeFrom(resource.DeepCopy())
+				resource.Finalizers = nil
+				_ = k8sClient.Patch(ctx, resource, patch)
+			}
+			_ = k8sClient.Delete(ctx, resource)
 		})
 
 		It("returns without error when the Zone was deleted", func() {
@@ -113,6 +132,86 @@ var _ = Describe("Zone Controller", func() {
 			Expect(zone.Status.ZoneCreated).To(BeTrue())
 			Expect(zone.Status.ObservedGeneration).To(Equal(zone.Generation))
 			Expect(meta.IsStatusConditionTrue(zone.Status.Conditions, conditionReady)).To(BeTrue())
+			Expect(zone.Finalizers).To(ContainElement(zoneFinalizer))
+		})
+
+		It("deletes the server zone and clears the finalizer on delete", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{getOptions: notFound}
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			resource := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			// The finalizer keeps the object around until the controller runs.
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			Expect(resource.DeletionTimestamp).NotTo(BeNil())
+
+			_, err = newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.deleteCalls).To(Equal([]string{zoneName}))
+
+			err = k8sClient.Get(ctx, key, resource)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("completes deletion when the server zone is already gone", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{
+				getOptions: notFound,
+				deleteErr:  fmt.Errorf("%w: no such zone", technitium.ErrZoneNotFound),
+			}
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			resource := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			_, err = newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			err = k8sClient.Get(ctx, key, resource)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		})
+
+		It("keeps the finalizer when the server delete fails", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{getOptions: notFound}
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			resource := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			failing := &fakeZoneAPI{getOptions: notFound, deleteErr: fmt.Errorf("server unreachable")}
+			_, err = newReconciler(failing).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).To(HaveOccurred())
+
+			// The zone must still exist with its finalizer so cleanup is retried.
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			Expect(resource.Finalizers).To(ContainElement(zoneFinalizer))
+		})
+
+		It("leaves the server zone intact when the deletion policy is Orphan", func() {
+			createZoneCR(func(z *dnsv1alpha1.Zone) { z.Spec.DeletionPolicy = dnsv1alpha1.DeletionPolicyOrphan })
+			api := &fakeZoneAPI{getOptions: notFound}
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			resource := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			_, err = newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.deleteCalls).To(BeEmpty())
+
+			err = k8sClient.Get(ctx, key, resource)
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 		})
 
 		It("passes forwarder and catalog options through on create", func() {

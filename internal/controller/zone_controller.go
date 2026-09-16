@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
@@ -45,7 +46,13 @@ type ZoneAPI interface {
 	CreateZone(ctx context.Context, opts technitium.CreateZoneOptions) error
 	GetZoneOptions(ctx context.Context, zone string) (*technitium.ZoneOptions, error)
 	SetZoneOptions(ctx context.Context, zone string, opts technitium.ZoneOptionsUpdate) error
+	DeleteZone(ctx context.Context, zone string) error
 }
+
+// zoneFinalizer guards server-side cleanup: while it is present, Kubernetes will
+// not remove the Zone object, giving the controller a chance to delete the zone
+// from Technitium before the resource disappears.
+const zoneFinalizer = "dns.packet.fail/zone-cleanup"
 
 // ZoneReconciler reconciles a Zone object
 type ZoneReconciler struct {
@@ -71,6 +78,22 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// A set deletion timestamp means the resource is being torn down: run
+	// server-side cleanup and drop the finalizer instead of reconciling desired
+	// state.
+	if !zone.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.finalizeZone(ctx, &zone)
+	}
+
+	// Register the finalizer before touching the server so a delete that arrives
+	// mid-flight still triggers cleanup. reconcileZone only reads the spec, so it
+	// is safe to continue with the same object after the update.
+	if controllerutil.AddFinalizer(&zone, zoneFinalizer) {
+		if err := r.Update(ctx, &zone); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	if err := r.reconcileZone(ctx, &zone); err != nil {
 		log.Error(err, "Failed to reconcile Zone", "zone", zone.Spec.ZoneName)
 		if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
@@ -84,6 +107,32 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	return ctrl.Result{RequeueAfter: driftReconcileInterval}, nil
+}
+
+// finalizeZone removes the zone from the server (unless orphaned) and then clears
+// the finalizer. The finalizer is only removed once the server-side delete has
+// confirmed, so a failed delete requeues with the resource still intact rather
+// than leaking the zone. A zone that is already gone is treated as success.
+func (r *ZoneReconciler) finalizeZone(ctx context.Context, zone *dnsv1alpha1.Zone) error {
+	log := logf.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(zone, zoneFinalizer) {
+		return nil
+	}
+
+	if zone.Spec.DeletionPolicy == dnsv1alpha1.DeletionPolicyOrphan {
+		log.Info("Orphaning Zone: leaving the server-side zone in place", "zone", zone.Spec.ZoneName)
+	} else {
+		if err := r.Technitium.DeleteZone(ctx, zone.Spec.ZoneName); err != nil {
+			if !errors.Is(err, technitium.ErrZoneNotFound) {
+				return err
+			}
+		}
+		log.Info("Deleted Zone from the Technitium server", "zone", zone.Spec.ZoneName)
+	}
+
+	controllerutil.RemoveFinalizer(zone, zoneFinalizer)
+	return r.Update(ctx, zone)
 }
 
 // reconcileZone brings the server-side zone in line with the spec. It is

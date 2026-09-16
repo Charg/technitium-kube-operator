@@ -63,6 +63,17 @@ spec:
                   catalog is the name of an existing catalog zone that this zone joins as a
                   member. Applies to Primary, Secondary, Stub, and Forwarder zones.
                 type: string
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  deletionPolicy controls what happens to the server-side zone when this
+                  resource is deleted. "Delete" (the default) removes the zone from the
+                  Technitium server. "Orphan" leaves the server zone intact and only clears
+                  the finalizer, which is useful for safe adoption or migration.
+                enum:
+                - Delete
+                - Orphan
+                type: string
               forwarder:
                 description: |-
                   forwarder is the address (IP or hostname) of the upstream resolver used
