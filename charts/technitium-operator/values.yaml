@@ -70,6 +70,17 @@ affinity: {}
 
 terminationGracePeriodSeconds: 10
 
+## @section Technitium connection
+
+technitium:
+  # Base URL of the Technitium DNS Server, for example https://dns.internal:5380. Required.
+  url: ""
+  # Name of an existing Secret in the release namespace holding Technitium credentials.
+  # The Secret must contain either a `token` key, or `username` and `password` keys.
+  existingSecret: ""
+  # Skip TLS certificate verification when connecting to Technitium (for self-signed certificates).
+  insecureSkipVerify: false
+
 ## @section Manager configuration
 
 leaderElection:

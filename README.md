@@ -4,6 +4,45 @@ A Kubernetes operator that manages Technitium DNS Server zones as custom resourc
 ## Description
 The operator reconciles `Zone` resources (API group `dns.packet.fail/v1alpha1`) against a Technitium DNS Server, keeping DNS zones declared in the cluster in sync with the server. Manage DNS state with kubectl and GitOps instead of the Technitium admin console.
 
+## Configuration
+The operator needs a Technitium DNS Server URL and credentials to reconcile `Zone` resources. Credentials are read from a Kubernetes Secret, never from a CR or ConfigMap.
+
+| Flag | Env var | Meaning | Required |
+| --- | --- | --- | --- |
+| `--technitium-url` | `TECHNITIUM_URL` | Base URL of the Technitium DNS Server, e.g. `https://dns.internal:5380`. | Yes |
+| `--technitium-credentials-secret` | `TECHNITIUM_CREDENTIALS_SECRET` | Name of the Secret holding credentials. | Yes |
+| `--technitium-credentials-namespace` | `TECHNITIUM_CREDENTIALS_NAMESPACE` (falls back to `POD_NAMESPACE`) | Namespace of the credentials Secret. Defaults to the operator's own namespace. | No |
+| `--technitium-insecure-skip-verify` | `TECHNITIUM_INSECURE_SKIP_VERIFY` | Skip TLS verification (self-signed certs). | No |
+
+A flag overrides its env var when both are set.
+
+The credentials Secret must contain either a `token` key (a pre-created Technitium API token) or both `username` and `password` keys.
+
+Token form:
+
+```sh
+kubectl create secret generic technitium-creds \
+  --from-literal=token=<api-token>
+```
+
+Username/password is the alternative:
+
+```sh
+kubectl create secret generic technitium-creds \
+  --from-literal=username=<user> \
+  --from-literal=password=<pass>
+```
+
+Helm install, setting the URL and pointing at the Secret:
+
+```sh
+helm install technitium-operator ./charts/technitium-operator \
+  --set technitium.url=https://dns.internal:5380 \
+  --set technitium.existingSecret=technitium-creds
+```
+
+The manager exits at startup with a descriptive error if the URL or credentials Secret is missing.
+
 ## Getting Started
 
 ### Prerequisites

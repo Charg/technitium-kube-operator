@@ -16,17 +16,22 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+	"github.com/charg/technitium-operator/internal/technitium"
 )
 
 // ZoneReconciler reconciles a Zone object
 type ZoneReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// Technitium is the client used to reconcile zones against the DNS server. It
+	// is constructed once at startup and shared across reconciles.
+	Technitium *technitium.Client
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
