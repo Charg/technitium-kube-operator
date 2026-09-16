@@ -189,12 +189,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// TechnitiumCluster is cluster-scoped, but the StatefulSet/Services/Secret it
+	// provisions are namespaced and live alongside the operator rather than the
+	// CR (which has no namespace of its own to borrow).
+	operatorNamespace := os.Getenv("POD_NAMESPACE")
+	if operatorNamespace == "" {
+		setupLog.Info("POD_NAMESPACE is unset; defaulting the TechnitiumCluster workload namespace to \"default\"")
+		operatorNamespace = "default"
+	}
+
 	if err := (&controller.ZoneReconciler{
 		Client:     mgr.GetClient(),
 		Scheme:     mgr.GetScheme(),
 		Technitium: technitiumClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "zone")
+		os.Exit(1)
+	}
+	if err := (&controller.TechnitiumClusterReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "technitiumcluster")
 		os.Exit(1)
 	}
 	// nolint:goconst
