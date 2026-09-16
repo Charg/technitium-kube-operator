@@ -15,6 +15,9 @@
   labels: ["dependencies"],
   rangeStrategy: "bump",
 
+  // Batch runs into a weekly window to cut PR churn.
+  schedule: ["* * * * 0"],
+
   // k8s.io/* and sigs.k8s.io/* release in lockstep against a Kubernetes minor;
   // bumping them individually produces incompatible go.mod graphs.
   packageRules: [
@@ -27,6 +30,11 @@
       matchManagers: ["gomod"],
       matchUpdateTypes: ["minor", "patch"],
       groupName: "go dependencies (non-major)",
+    },
+    // One PR for all GitHub Actions bumps instead of one per action.
+    {
+      matchManagers: ["github-actions"],
+      groupName: "github actions",
     },
     // go.mod pins the toolchain; treat it as a deliberate, separate change.
     {
@@ -45,7 +53,7 @@
   nix: { enabled: true },
   lockFileMaintenance: {
     enabled: true,
-    schedule: ["before 6am on monday"],
+    schedule: ["before 6am on sunday"],
   },
 
   // Tool versions pinned as just variables. Track upstream releases without editing the justfile.
