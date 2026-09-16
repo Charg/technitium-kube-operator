@@ -19,8 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
 )
@@ -82,8 +80,8 @@ var _ = Describe("Zone Controller", func() {
 
 		createZoneCR := func(mutate func(*dnsv1alpha1.Zone)) {
 			resource := &dnsv1alpha1.Zone{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
-				Spec:       dnsv1alpha1.ZoneSpec{ZoneName: zoneName},
+				Name: resourceName,
+				Spec: dnsv1alpha1.ZoneSpec{ZoneName: zoneName},
 			}
 			if mutate != nil {
 				mutate(resource)

@@ -198,8 +198,7 @@ func TestDoRawStatusClassification(t *testing.T) {
 				t.Fatalf("err = %v, want errors.Is %v", err, tt.wantErrIs)
 			}
 			if tt.wantErrIs == nil {
-				var apiErr *APIError
-				if !errors.As(err, &apiErr) {
+				if _, ok := errors.AsType[*APIError](err); !ok {
 					t.Fatalf("err = %v, want *APIError", err)
 				}
 			}

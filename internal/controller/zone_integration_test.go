@@ -17,7 +17,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -124,8 +123,8 @@ var _ = Describe("Zone Controller against a fake Technitium server", func() {
 		}
 
 		zone := &dnsv1alpha1.Zone{
-			ObjectMeta: metav1.ObjectMeta{Name: resourceName},
-			Spec:       dnsv1alpha1.ZoneSpec{ZoneName: zoneName, Type: dnsv1alpha1.ZoneTypePrimary},
+			Name: resourceName,
+			Spec: dnsv1alpha1.ZoneSpec{ZoneName: zoneName, Type: dnsv1alpha1.ZoneTypePrimary},
 		}
 		Expect(k8sClient.Create(ctx, zone)).To(Succeed())
 	})
