@@ -112,7 +112,7 @@ var _ = Describe("Zone Controller", func() {
 			Expect(k8sClient.Get(ctx, key, zone)).To(Succeed())
 			Expect(zone.Status.ZoneCreated).To(BeTrue())
 			Expect(zone.Status.ObservedGeneration).To(Equal(zone.Generation))
-			Expect(meta.IsStatusConditionTrue(zone.Status.Conditions, conditionAvailable)).To(BeTrue())
+			Expect(meta.IsStatusConditionTrue(zone.Status.Conditions, conditionReady)).To(BeTrue())
 		})
 
 		It("passes forwarder and catalog options through on create", func() {
@@ -218,9 +218,28 @@ var _ = Describe("Zone Controller", func() {
 
 			zone := &dnsv1alpha1.Zone{}
 			Expect(k8sClient.Get(ctx, key, zone)).To(Succeed())
-			cond := meta.FindStatusCondition(zone.Status.Conditions, conditionAvailable)
+			Expect(meta.IsStatusConditionFalse(zone.Status.Conditions, conditionReady)).To(BeTrue())
+			Expect(meta.IsStatusConditionTrue(zone.Status.Conditions, conditionDegraded)).To(BeTrue())
+			cond := meta.FindStatusCondition(zone.Status.Conditions, conditionDegraded)
 			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(cond.Message).To(ContainSubstring("server unreachable"))
+		})
+
+		It("clears Degraded and returns to Ready once the server recovers", func() {
+			createZoneCR(nil)
+
+			failing := &fakeZoneAPI{getOptions: notFound, createErr: fmt.Errorf("server unreachable")}
+			_, err := newReconciler(failing).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).To(HaveOccurred())
+
+			healthy := &fakeZoneAPI{getOptions: notFound}
+			_, err = newReconciler(healthy).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			zone := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, zone)).To(Succeed())
+			Expect(meta.IsStatusConditionTrue(zone.Status.Conditions, conditionReady)).To(BeTrue())
+			Expect(meta.IsStatusConditionFalse(zone.Status.Conditions, conditionDegraded)).To(BeTrue())
 		})
 	})
 })
