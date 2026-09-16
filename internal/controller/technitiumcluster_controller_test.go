@@ -17,7 +17,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -44,7 +43,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 		newNamespace := func() string {
 			nsCounter++
 			name := fmt.Sprintf("tc-test-ns-%d", nsCounter)
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}
+			ns := &corev1.Namespace{Name: name}
 			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
 			return name
 		}
@@ -65,7 +64,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			key = types.NamespacedName{Name: resourceName}
 
 			cr := &dnsv1alpha1.TechnitiumCluster{
-				ObjectMeta: metav1.ObjectMeta{Name: resourceName},
+				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
 					Image:   "technitium/dns-server:15.4.0",
 					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: storageSize},
@@ -132,7 +131,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			container := sts.Spec.Template.Spec.Containers[0]
 			Expect(container.Image).To(Equal("technitium/dns-server:15.4.0"))
 
-			var envNames []string
+			envNames := make([]string, 0, len(container.Env))
 			for _, e := range container.Env {
 				envNames = append(envNames, e.Name)
 			}

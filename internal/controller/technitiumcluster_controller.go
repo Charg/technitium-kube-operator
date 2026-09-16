@@ -168,10 +168,9 @@ func resolvedAdminSecretName(tc *dnsv1alpha1.TechnitiumCluster) string {
 // assigned; leaving it alone on update avoids fighting the apiserver over a
 // field we do not actually need to correct.
 func (r *TechnitiumClusterReconciler) reconcileHeadlessService(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+	svc := &corev1.Service{
 		Name:      headlessServiceName(tc.Name),
-		Namespace: r.OperatorNamespace,
-	}}
+		Namespace: r.OperatorNamespace}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		if err := controllerutil.SetControllerReference(tc, svc, r.Scheme); err != nil {
@@ -193,10 +192,9 @@ func (r *TechnitiumClusterReconciler) reconcileHeadlessService(ctx context.Conte
 // operator can front the instance with a LoadBalancer or wire up
 // external-dns without editing the Service by hand.
 func (r *TechnitiumClusterReconciler) reconcileClientService(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
-	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{
+	svc := &corev1.Service{
 		Name:      clientServiceName(tc.Name),
-		Namespace: r.OperatorNamespace,
-	}}
+		Namespace: r.OperatorNamespace}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
 		if err := controllerutil.SetControllerReference(tc, svc, r.Scheme); err != nil {
@@ -230,10 +228,9 @@ func dnsServicePorts() []corev1.ServicePort {
 // either on a routine reconcile would invalidate a session the server already
 // issued.
 func (r *TechnitiumClusterReconciler) reconcileAdminSecret(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
-	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+	secret := &corev1.Secret{
 		Name:      adminSecretName(tc.Name),
-		Namespace: r.OperatorNamespace,
-	}}
+		Namespace: r.OperatorNamespace}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
 		if err := controllerutil.SetControllerReference(tc, secret, r.Scheme); err != nil {
@@ -275,10 +272,9 @@ func generatePassword() (string, error) {
 // StatefulSet is created, so touching them again would just turn a routine
 // drift-correction into a failed update.
 func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*appsv1.StatefulSet, error) {
-	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{
+	sts := &appsv1.StatefulSet{
 		Name:      statefulSetName(tc.Name),
-		Namespace: r.OperatorNamespace,
-	}}
+		Namespace: r.OperatorNamespace}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		if err := controllerutil.SetControllerReference(tc, sts, r.Scheme); err != nil {
@@ -323,15 +319,13 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 		// redirects, and kubelet does not follow redirects when scoring probe
 		// success. A bare TCP check on the web API port is a reliable proxy
 		// for "the server process is up and listening".
-		ProbeHandler: corev1.ProbeHandler{
-			TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(5380)},
-		},
+		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(5380)},
 		InitialDelaySeconds: 10,
 		PeriodSeconds:       10,
 	}
 
 	return corev1.PodTemplateSpec{
-		ObjectMeta: metav1.ObjectMeta{Labels: commonLabels(tc.Name)},
+		Labels: commonLabels(tc.Name),
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
@@ -355,12 +349,10 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 			Volumes: []corev1.Volume{
 				{
 					Name: "admin",
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName: resolvedAdminSecretName(tc),
-							Items: []corev1.KeyToPath{
-								{Key: adminSecretPasswordKey, Path: "password"},
-							},
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: resolvedAdminSecretName(tc),
+						Items: []corev1.KeyToPath{
+							{Key: adminSecretPasswordKey, Path: "password"},
 						},
 					},
 				},
@@ -374,7 +366,7 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 // volumeClaimTemplates cannot be changed on an existing StatefulSet.
 func volumeClaimTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PersistentVolumeClaim {
 	return corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: "data", Labels: commonLabels(tc.Name)},
+		Name: "data", Labels: commonLabels(tc.Name),
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			Resources: corev1.VolumeResourceRequirements{
