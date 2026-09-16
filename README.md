@@ -43,6 +43,42 @@ helm install technitium-operator ./charts/technitium-operator \
 
 The manager exits at startup with a descriptive error if the URL or credentials Secret is missing.
 
+## Zone resource
+A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zone namespace, so `zoneName` must be unique across the whole cluster rather than per Kubernetes namespace.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `zoneName` | string | Yes | Fully qualified DNS name of the zone, e.g. `example.com`. Immutable: the API server rejects any update that changes it. Delete and recreate the resource to rename a zone. |
+| `type` | enum | No (default `Primary`) | One of `Primary`, `Secondary`, `Stub`, `Forwarder`, `Catalog`. |
+| `primaryNameServerAddresses` | []string | No | IP addresses or hostnames of the upstream primary. Used by `Secondary` and `Stub` zones, ignored by other types. |
+| `forwarder` | string | No | Address of the upstream resolver for a `Forwarder` zone. The special value `this-server` forwards to the local DNS server. Ignored by other types. |
+| `forwarderProtocol` | enum | No | Transport to the forwarder: `Udp`, `Tcp`, `Tls`, `Https`, `Quic`. Applies to `Forwarder` zones only; defaults to `Udp` on the server when unset. |
+| `catalog` | string | No | Name of an existing catalog zone this zone joins as a member. Applies to `Primary`, `Secondary`, `Stub`, and `Forwarder` zones. |
+
+Minimal Primary zone, once the server URL and credentials Secret from [Configuration](#configuration) are in place:
+
+```yaml
+apiVersion: dns.packet.fail/v1alpha1
+kind: Zone
+metadata:
+  name: example-com
+spec:
+  zoneName: example.com
+  type: Primary
+```
+
+```sh
+kubectl apply -f zone.yaml
+kubectl get zones
+```
+
+```
+NAME          ZONE          TYPE      READY   AGE
+example-com   example.com   Primary   True    12s
+```
+
+More examples, including a `Forwarder` zone, are in `config/samples/dns_v1alpha1_zone.yaml`.
+
 ## Getting Started
 
 ### Prerequisites

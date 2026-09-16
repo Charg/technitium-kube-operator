@@ -4,7 +4,20 @@ metadata:
   labels:
     app.kubernetes.io/name: technitium-operator
     app.kubernetes.io/managed-by: kustomize
-  name: zone-sample
+  name: zone-sample-primary
 spec:
   zoneName: example.com
   type: Primary
+---
+apiVersion: dns.packet.fail/v1alpha1
+kind: Zone
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: zone-sample-forwarder
+spec:
+  zoneName: internal.example.com
+  type: Forwarder
+  forwarder: 10.0.0.53
+  forwarderProtocol: Udp
