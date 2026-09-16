@@ -335,15 +335,36 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput, err := getMetricsOutput()
-		// Expect(err).NotTo(HaveOccurred(), "Failed to retrieve logs from curl pod")
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("reconciles a Zone through to Ready and cleans it up on delete", func() {
+			By("deploying a Technitium API stub and pointing the operator at it")
+			deployTechnitiumStub()
+			pointOperatorAtStub()
+
+			By("applying a Zone")
+			applyZone("e2e-zone", "e2e.example.com")
+
+			By("waiting for the Zone to report Ready")
+			verifyZoneReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "zone", "e2e-zone",
+					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"), "Zone not Ready yet")
+			}
+			Eventually(verifyZoneReady, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+			By("deleting the Zone and waiting for the finalizer to clear it")
+			cmd := exec.Command("kubectl", "delete", "zone", "e2e-zone", "--wait=true", "--timeout=90s")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
+
+			verifyZoneGone := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "zone", "e2e-zone")
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Zone should no longer exist")
+			}
+			Eventually(verifyZoneGone, time.Minute, 2*time.Second).Should(Succeed())
+		})
 	})
 })
 
