@@ -81,6 +81,21 @@ technitium:
   # Skip TLS certificate verification when connecting to Technitium (for self-signed certificates).
   insecureSkipVerify: false
 
+## @section Admission webhook
+
+webhook:
+  # Enable the validating/defaulting admission webhook for Zone resources.
+  # Requires cert-manager in the cluster to issue the serving certificate.
+  enabled: false
+  # Port the webhook server listens on inside the container.
+  port: 9443
+  # Fail (deny the request) or Ignore (admit) when the webhook is unreachable.
+  failurePolicy: Fail
+  certManager:
+    # Create a self-signed Issuer and Certificate for the webhook. Set to false
+    # to supply your own Certificate that writes the `webhook-server-cert` Secret.
+    enabled: true
+
 ## @section Manager configuration
 
 leaderElection:

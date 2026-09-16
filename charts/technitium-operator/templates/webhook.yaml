@@ -1,0 +1,108 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: webhook-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+spec:
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: {{ .Values.webhook.port }}
+  selector:
+    {{- include "technitium-operator.selectorLabels" . | nindent 4 }}
+{{- if .Values.webhook.certManager.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "technitium-operator.fullname" . }}-selfsigned-issuer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "technitium-operator.fullname" . }}-serving-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+  - webhook-service.{{ .Release.Namespace }}.svc
+  - webhook-service.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ include "technitium-operator.fullname" . }}-selfsigned-issuer
+  secretName: webhook-server-cert
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "technitium-operator.fullname" . }}-mutating-webhook-configuration
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "technitium-operator.fullname" . }}-serving-cert
+  {{- end }}
+webhooks:
+- name: mzone-v1alpha1.kb.io
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /mutate-dns-packet-fail-v1alpha1-zone
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - zones
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "technitium-operator.fullname" . }}-validating-webhook-configuration
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+  {{- if .Values.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "technitium-operator.fullname" . }}-serving-cert
+  {{- end }}
+webhooks:
+- name: vzone-v1alpha1.kb.io
+  admissionReviewVersions:
+  - v1
+  sideEffects: None
+  failurePolicy: {{ .Values.webhook.failurePolicy }}
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-dns-packet-fail-v1alpha1-zone
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - zones
+{{- end }}

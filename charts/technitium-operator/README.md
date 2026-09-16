@@ -41,6 +41,9 @@ kubectl delete crd zones.dns.packet.fail
 | `rbac.create` | `true` | Create the ClusterRole/RoleBindings the manager needs |
 | `rbac.zoneAggregateRoles` | `true` | Create `zone-admin`/`zone-editor`/`zone-viewer` ClusterRoles for delegating access to `Zone` resources (not used by the operator itself) |
 | `leaderElection.enabled` | `true` | Enable leader election (`--leader-elect`) |
+| `webhook.enabled` | `false` | Enable the validating/defaulting admission webhook for `Zone` (requires cert-manager) |
+| `webhook.failurePolicy` | `Fail` | Admission behavior when the webhook is unreachable (`Fail` or `Ignore`) |
+| `webhook.certManager.enabled` | `true` | Create a self-signed cert-manager Issuer and Certificate for the webhook |
 | `metrics.enabled` | `true` | Expose `/metrics` over HTTPS and create the metrics Service |
 | `metrics.serviceMonitor.enabled` | `false` | Create a Prometheus Operator `ServiceMonitor` (requires the CRD to be installed) |
 | `networkPolicy.enabled` | `false` | Restrict ingress to `/metrics` to namespaces labeled `metrics: enabled` |
