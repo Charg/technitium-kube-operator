@@ -16,6 +16,7 @@ import (
 )
 
 const testZoneName = "example.com"
+const testServerName = "dns"
 
 var _ = Describe("Zone Webhook", func() {
 	var (
@@ -63,12 +64,31 @@ var _ = Describe("Zone Webhook", func() {
 	Context("When creating or updating Zone under Validating Webhook", func() {
 		It("admits a Primary zone with only a name", func() {
 			obj.Spec.ZoneName = testZoneName
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
 			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
 			Expect(validator.ValidateCreate(ctx, obj)).Error().NotTo(HaveOccurred())
 		})
 
+		It("rejects a zone with no serverRef", func() {
+			obj.Spec.ZoneName = testZoneName
+			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("serverRef"))
+		})
+
+		It("rejects a zone whose serverRef sets a namespace", func() {
+			obj.Spec.ZoneName = testZoneName
+			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName, Namespace: "some-tenant"}
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("serverRef.namespace"))
+		})
+
 		It("rejects a Forwarder zone without a forwarder", func() {
 			obj.Spec.ZoneName = "fwd.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
 			obj.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
 			_, err := validator.ValidateCreate(ctx, obj)
 			Expect(err).To(HaveOccurred())
@@ -78,6 +98,7 @@ var _ = Describe("Zone Webhook", func() {
 		It("admits a Forwarder zone with a forwarder", func() {
 			fwd := "1.1.1.1"
 			obj.Spec.ZoneName = "fwd.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
 			obj.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
 			obj.Spec.Forwarder = &fwd
 			Expect(validator.ValidateCreate(ctx, obj)).Error().NotTo(HaveOccurred())
@@ -85,6 +106,7 @@ var _ = Describe("Zone Webhook", func() {
 
 		It("rejects a Secondary zone without primaryNameServerAddresses", func() {
 			obj.Spec.ZoneName = "sec.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
 			obj.Spec.Type = dnsv1alpha1.ZoneTypeSecondary
 			_, err := validator.ValidateCreate(ctx, obj)
 			Expect(err).To(HaveOccurred())
@@ -94,6 +116,7 @@ var _ = Describe("Zone Webhook", func() {
 		It("rejects a changed zoneName on update", func() {
 			oldObj.Spec.ZoneName = testZoneName
 			obj.Spec.ZoneName = "renamed.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
 			_, err := validator.ValidateUpdate(ctx, oldObj, obj)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("immutable"))
@@ -102,6 +125,7 @@ var _ = Describe("Zone Webhook", func() {
 		It("admits an update that keeps zoneName", func() {
 			oldObj.Spec.ZoneName = testZoneName
 			obj.Spec.ZoneName = testZoneName
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
 			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
 			Expect(validator.ValidateUpdate(ctx, oldObj, obj)).Error().NotTo(HaveOccurred())
 		})

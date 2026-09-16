@@ -63,12 +63,6 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
-          # Placeholder connection config. Override the URL and provide real
-          # credentials in the referenced Secret for a working deployment; the
-          # Helm chart exposes technitium.url and technitium.existingSecret for
-          # this. The name carries the kustomize namePrefix.
-          - --technitium-url=https://technitium.example.com
-          - --technitium-credentials-secret=technitium-operator-credentials
         image: controller:latest
         name: manager
         env:

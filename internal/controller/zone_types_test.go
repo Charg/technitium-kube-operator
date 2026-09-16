@@ -24,7 +24,10 @@ var _ = Describe("Zone CRD validation", func() {
 	newZone := func(name string) *dnsv1alpha1.Zone {
 		return &dnsv1alpha1.Zone{
 			Name: name,
-			Spec: dnsv1alpha1.ZoneSpec{ZoneName: name + ".example.com"},
+			Spec: dnsv1alpha1.ZoneSpec{
+				ZoneName:  name + ".example.com",
+				ServerRef: dnsv1alpha1.SecretReference{Name: "dns"},
+			},
 		}
 	}
 

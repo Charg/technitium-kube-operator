@@ -85,6 +85,18 @@ func validateSpec(zone, oldZone *dnsv1alpha1.Zone) error {
 			"zoneName is immutable: delete and recreate the resource to rename a zone"))
 	}
 
+	if zone.Spec.ServerRef.Name == "" {
+		errs = append(errs, field.Required(specPath.Child("serverRef").Child("name"),
+			"serverRef.name is required: a Zone must name the TechnitiumCluster it is created on"))
+	}
+	// A TechnitiumCluster is cluster-scoped, so serverRef.namespace is meaningless.
+	// Reject it rather than silently ignore it, which would mislead anyone expecting
+	// cross-namespace targeting.
+	if zone.Spec.ServerRef.Namespace != "" {
+		errs = append(errs, field.Invalid(specPath.Child("serverRef").Child("namespace"), zone.Spec.ServerRef.Namespace,
+			"serverRef.namespace must not be set: a TechnitiumCluster is cluster-scoped and resolved by name"))
+	}
+
 	switch zone.Spec.Type {
 	case dnsv1alpha1.ZoneTypeForwarder:
 		if zone.Spec.Forwarder == nil || *zone.Spec.Forwarder == "" {

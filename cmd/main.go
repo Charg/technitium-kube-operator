@@ -8,19 +8,15 @@ the full license text.
 package main
 
 import (
-	"context"
 	"crypto/tls"
 	"flag"
-	"fmt"
 	"os"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -31,9 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
-	"github.com/charg/technitium-operator/internal/config"
 	"github.com/charg/technitium-operator/internal/controller"
-	"github.com/charg/technitium-operator/internal/technitium"
 	webhookv1alpha1 "github.com/charg/technitium-operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
@@ -77,8 +71,6 @@ func main() {
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
-	var connCfg config.Config
-	connCfg.BindFlags(flag.CommandLine)
 	opts := zap.Options{
 		Development: true,
 	}
@@ -86,11 +78,6 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-
-	if err := connCfg.Validate(); err != nil {
-		setupLog.Error(err, "Invalid Technitium connection configuration")
-		os.Exit(1)
-	}
 
 	// if the enable-http2 flag is false (the default), http/2 should be disabled
 	// due to its vulnerabilities. More specifically, disabling http/2 will
@@ -183,12 +170,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	technitiumClient, err := buildTechnitiumClient(context.Background(), mgr, connCfg)
-	if err != nil {
-		setupLog.Error(err, "Failed to configure Technitium client")
-		os.Exit(1)
-	}
-
 	// TechnitiumCluster is cluster-scoped, but the StatefulSet/Services/Secret it
 	// provisions are namespaced and live alongside the operator rather than the
 	// CR (which has no namespace of its own to borrow).
@@ -199,9 +180,9 @@ func main() {
 	}
 
 	if err := (&controller.ZoneReconciler{
-		Client:     mgr.GetClient(),
-		Scheme:     mgr.GetScheme(),
-		Technitium: technitiumClient,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: operatorNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "zone")
 		os.Exit(1)
@@ -237,38 +218,4 @@ func main() {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}
-}
-
-// buildTechnitiumClient reads the credentials Secret and constructs the shared
-// Technitium client. It uses the manager's API reader, which reads directly from
-// the API server, because the cached client is not usable until the manager has
-// started.
-func buildTechnitiumClient(ctx context.Context, mgr ctrl.Manager, cfg config.Config) (*technitium.Client, error) {
-	var secret corev1.Secret
-	key := types.NamespacedName{Namespace: cfg.SecretNamespace, Name: cfg.SecretName}
-	if err := mgr.GetAPIReader().Get(ctx, key, &secret); err != nil {
-		return nil, fmt.Errorf("reading credentials secret %s: %w", key, err)
-	}
-
-	opts, err := config.ClientOptionsFromSecret(&secret)
-	if err != nil {
-		return nil, err
-	}
-	opts = append(opts, technitium.WithInsecureSkipVerify(cfg.InsecureSkipVerify))
-
-	client, err := technitium.NewClient(cfg.TechnitiumURL, opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	// A username/password Secret carries no token yet: exchange the credentials
-	// for one now so every request authenticates, and so bad credentials fail
-	// startup rather than every later reconcile.
-	if client.Token() == "" {
-		if _, err := client.Login(ctx); err != nil {
-			return nil, fmt.Errorf("logging in to Technitium at %s: %w", cfg.TechnitiumURL, err)
-		}
-	}
-
-	return client, nil
 }

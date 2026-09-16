@@ -105,6 +105,7 @@ func (f *fakeTechnitiumServer) has(zone string) bool {
 var _ = Describe("Zone Controller against a fake Technitium server", func() {
 	const resourceName = "integration-zone"
 	const zoneName = "integration.example.com"
+	const serverName = "integration-server"
 
 	ctx := context.Background()
 	key := types.NamespacedName{Name: resourceName}
@@ -117,14 +118,21 @@ var _ = Describe("Zone Controller against a fake Technitium server", func() {
 		tech, err := technitium.NewClient(server.URL, technitium.WithToken("test-token"))
 		Expect(err).NotTo(HaveOccurred())
 		reconciler = &ZoneReconciler{
-			Client:     k8sClient,
-			Scheme:     k8sClient.Scheme(),
-			Technitium: tech,
+			Client:            k8sClient,
+			Scheme:            k8sClient.Scheme(),
+			OperatorNamespace: "default",
+			NewServerClient: func(_ context.Context, _ dnsv1alpha1.SecretReference) (ZoneAPI, error) {
+				return tech, nil
+			},
 		}
 
 		zone := &dnsv1alpha1.Zone{
 			Name: resourceName,
-			Spec: dnsv1alpha1.ZoneSpec{ZoneName: zoneName, Type: dnsv1alpha1.ZoneTypePrimary},
+			Spec: dnsv1alpha1.ZoneSpec{
+				ZoneName:  zoneName,
+				ServerRef: dnsv1alpha1.SecretReference{Name: serverName},
+				Type:      dnsv1alpha1.ZoneTypePrimary,
+			},
 		}
 		Expect(k8sClient.Create(ctx, zone)).To(Succeed())
 	})

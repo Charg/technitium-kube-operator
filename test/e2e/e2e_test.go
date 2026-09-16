@@ -336,12 +336,14 @@ var _ = Describe("Manager", Ordered, func() {
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		It("reconciles a Zone through to Ready and cleans it up on delete", func() {
-			By("deploying a Technitium API stub and pointing the operator at it")
-			deployTechnitiumStub()
-			pointOperatorAtStub()
+			By("provisioning a TechnitiumCluster and waiting for it to become Ready")
+			deployTechnitiumCluster(clusterName)
 
-			By("applying a Zone")
-			applyZone("e2e-zone", "e2e.example.com")
+			By("waiting for the webhook endpoint to be reachable")
+			waitForWebhookEndpointReady()
+
+			By("applying a Zone targeting the managed cluster")
+			applyZone("e2e-zone", "e2e.example.com", clusterName)
 
 			By("waiting for the Zone to report Ready")
 			verifyZoneReady := func(g Gomega) {
@@ -364,6 +366,11 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(err).To(HaveOccurred(), "Zone should no longer exist")
 			}
 			Eventually(verifyZoneGone, time.Minute, 2*time.Second).Should(Succeed())
+
+			By("deleting the TechnitiumCluster")
+			cmd = exec.Command("kubectl", "delete", "technitiumcluster", clusterName, "--wait=true", "--timeout=90s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "TechnitiumCluster deletion did not complete")
 		})
 	})
 })

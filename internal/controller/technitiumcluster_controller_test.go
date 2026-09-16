@@ -146,6 +146,37 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(sts.Spec.VolumeClaimTemplates[0].Spec.Resources.Requests.Storage().String()).To(Equal(storageSize.String()))
 		})
 
+		It("runs the workload under the restricted Pod Security Standard", func() {
+			createClusterCR(nil)
+			_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			var sts appsv1.StatefulSet
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+			podSpec := sts.Spec.Template.Spec
+
+			Expect(podSpec.SecurityContext).NotTo(BeNil())
+			Expect(*podSpec.SecurityContext.RunAsNonRoot).To(BeTrue())
+			Expect(*podSpec.SecurityContext.RunAsUser).To(Equal(int64(1000)))
+			Expect(*podSpec.SecurityContext.FSGroup).To(Equal(int64(1000)))
+			Expect(podSpec.SecurityContext.SeccompProfile.Type).To(Equal(corev1.SeccompProfileTypeRuntimeDefault))
+
+			container := podSpec.Containers[0]
+			Expect(container.SecurityContext).NotTo(BeNil())
+			Expect(*container.SecurityContext.AllowPrivilegeEscalation).To(BeFalse())
+			Expect(container.SecurityContext.Capabilities.Drop).To(ConsistOf(corev1.Capability("ALL")))
+			// Port 53 binding requires NET_BIND_SERVICE, the one capability the
+			// restricted profile permits adding back.
+			Expect(container.SecurityContext.Capabilities.Add).To(ConsistOf(corev1.Capability("NET_BIND_SERVICE")))
+
+			// Technitium writes to /var/log/technitium and /tmp, which a non-root
+			// process cannot create on the container root filesystem.
+			Expect(container.VolumeMounts).To(ContainElement(corev1.VolumeMount{Name: "varlog", MountPath: "/var/log/technitium"}))
+			Expect(container.VolumeMounts).To(ContainElement(corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"}))
+			Expect(podSpec.Volumes).To(ContainElement(HaveField("Name", "varlog")))
+			Expect(podSpec.Volumes).To(ContainElement(HaveField("Name", "tmp")))
+		})
+
 		It("corrects a hand-edited image and replica count back to spec", func() {
 			createClusterCR(nil)
 			r := newReconciler()
