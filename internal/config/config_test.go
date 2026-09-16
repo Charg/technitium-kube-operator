@@ -217,3 +217,29 @@ func TestClientOptionsFromSecret(t *testing.T) {
 		}
 	})
 }
+
+func TestUsernamePasswordFromSecret(t *testing.T) {
+	t.Run("username and password", func(t *testing.T) {
+		user, pass, ok := UsernamePasswordFromSecret(secretWith(map[string]string{
+			secretKeyUsername: "  " + testUsername + "\n", secretKeyPassword: testPassword,
+		}))
+		if !ok {
+			t.Fatal("ok = false, want true")
+		}
+		if user != testUsername || pass != testPassword {
+			t.Errorf("got (%q, %q), want (%q, %q)", user, pass, testUsername, testPassword)
+		}
+	})
+
+	t.Run("token-only secret has no username", func(t *testing.T) {
+		if _, _, ok := UsernamePasswordFromSecret(secretWith(map[string]string{secretKeyToken: testToken})); ok {
+			t.Error("ok = true, want false for a token-only secret")
+		}
+	})
+
+	t.Run("nil secret", func(t *testing.T) {
+		if _, _, ok := UsernamePasswordFromSecret(nil); ok {
+			t.Error("ok = true, want false for a nil secret")
+		}
+	})
+}

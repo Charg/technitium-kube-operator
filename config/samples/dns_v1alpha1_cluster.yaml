@@ -1,0 +1,25 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: Cluster
+metadata:
+  name: cluster-sample
+spec:
+  clusterDomain: cluster.example.com
+  # A secondary contacts the primary over the self-signed certificate that
+  # clustering enables, so verification is skipped for the node-to-node join.
+  ignoreCertificateErrors: true
+  primary:
+    name: ns1
+    endpoint: https://ns1.example.com:5380
+    ipAddresses:
+      - 10.0.0.1
+    credentialsSecretRef:
+      name: ns1-credentials
+      namespace: technitium-operator-system
+  secondaries:
+    - name: ns2
+      endpoint: https://ns2.example.com:5380
+      ipAddresses:
+        - 10.0.0.2
+      credentialsSecretRef:
+        name: ns2-credentials
+        namespace: technitium-operator-system

@@ -197,6 +197,15 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "zone")
 		os.Exit(1)
 	}
+	if err := (&controller.ClusterReconciler{
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		OperatorNamespace:  connCfg.SecretNamespace,
+		InsecureSkipVerify: connCfg.InsecureSkipVerify,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "cluster")
+		os.Exit(1)
+	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err := webhookv1alpha1.SetupZoneWebhookWithManager(mgr); err != nil {

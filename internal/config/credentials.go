@@ -48,3 +48,16 @@ func ClientOptionsFromSecret(secret *corev1.Secret) ([]technitium.Option, error)
 			secret.Name, secretKeyToken, secretKeyUsername, secretKeyPassword)
 	}
 }
+
+// UsernamePasswordFromSecret extracts the username and password from a
+// credentials Secret. It reports ok=false when no username is present, for
+// example a token-only Secret. Joining a secondary node needs the primary's
+// username and password, which a token cannot substitute for.
+func UsernamePasswordFromSecret(secret *corev1.Secret) (username, password string, ok bool) {
+	if secret == nil {
+		return "", "", false
+	}
+	username = strings.TrimSpace(string(secret.Data[secretKeyUsername]))
+	password = string(secret.Data[secretKeyPassword])
+	return username, password, username != ""
+}

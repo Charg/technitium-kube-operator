@@ -79,6 +79,38 @@ example-com   example.com   Primary   True    12s
 
 More examples, including a `Forwarder` zone, are in `config/samples/dns_v1alpha1_zone.yaml`.
 
+## Cluster resource
+A `Cluster` is cluster-scoped: a Technitium cluster is server-global state shared across nodes. The operator initializes the primary node once and joins each secondary once, driving each node through its own API. It reads every node's `/api/admin/cluster/state` before acting, so re-running reconcile against a formed cluster performs no re-init or re-join.
+
+Each node references a credentials Secret with the same shape as the [connection Secret](#configuration): a `token`, or a `username`/`password` pair. The primary's Secret must carry a `username` and `password`, not only a token: joining a secondary requires the primary's local administrator credentials, which the server will not accept as a token.
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `clusterDomain` | string | Yes | DNS name of the cluster, e.g. `cluster.example.com`. Immutable: the domain is baked into server-side cluster zones at initialization. |
+| `primary` | node | Yes | The node initialized as the cluster primary. |
+| `secondaries` | []node | No | Nodes joined to the cluster as secondaries, each joined once after the primary is initialized. |
+| `ignoreCertificateErrors` | bool | No (default `false`) | Skip TLS verification when a secondary contacts the primary to join. Initializing a cluster switches the primary to a self-signed certificate, so a join against a primary without a trusted CA needs this set to `true`. |
+
+Each node (`primary` and every entry in `secondaries`) has these fields:
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | string | Yes | Stable identifier for the node, surfaced in status. |
+| `endpoint` | string | Yes | Base URL of the node's Technitium API, e.g. `https://ns1.internal:5380`. |
+| `ipAddresses` | []string | Yes | The node's own reachable addresses advertised to cluster peers. |
+| `credentialsSecretRef` | object | Yes | `name` (and optional `namespace`, defaulting to the operator's namespace) of the Secret holding this node's admin credentials. |
+
+Reconciliation is ordered and converges on partial failure: the primary must reach an initialized state before any secondary is joined, and an unreachable node is recorded in status and retried rather than failing the whole cluster. Per-node membership is reported under `status.nodes`.
+
+Deleting a `Cluster` resource orphans the server-side cluster: reconciliation stops but the running DNS cluster is left intact. Tearing down a live cluster is a deliberate manual operation, so there is no finalizer.
+
+```
+NAME             DOMAIN                 PRIMARY   READY   AGE
+cluster-sample   cluster.example.com    ns1       True    30s
+```
+
+A full example is in `config/samples/dns_v1alpha1_cluster.yaml`.
+
 ## Getting Started
 
 ### Prerequisites

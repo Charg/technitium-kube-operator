@@ -13,6 +13,7 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
+  - clusters
   - zones
   verbs:
   - create
@@ -25,14 +26,15 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
-  - zones/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - dns.packet.fail
-  resources:
+  - clusters/status
   - zones/status
   verbs:
   - get
   - patch
+  - update
+- apiGroups:
+  - dns.packet.fail
+  resources:
+  - zones/finalizers
+  verbs:
   - update
