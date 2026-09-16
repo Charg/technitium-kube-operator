@@ -1,0 +1,10 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: TechnitiumCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: technitiumcluster-sample
+spec:
+  storage:
+    size: 1Gi

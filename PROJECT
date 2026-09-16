@@ -21,4 +21,12 @@ resources:
     defaulting: true
     validation: true
     webhookVersion: v1
+- api:
+    crdVersion: v1
+  controller: true
+  domain: packet.fail
+  group: dns
+  kind: TechnitiumCluster
+  path: github.com/charg/technitium-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"
