@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/dns.packet.fail_zones.yaml
+- bases/dns.packet.fail_technitiumclusters.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
