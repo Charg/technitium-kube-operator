@@ -169,15 +169,27 @@ func (r *ZoneReconciler) markAvailable(ctx context.Context, key client.ObjectKey
 		return client.IgnoreNotFound(err)
 	}
 
-	zone.Status.ObservedGeneration = zone.Generation
-	zone.Status.ZoneCreated = true
-	meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
+	// Only write status when something actually changed. A blind Update on every
+	// requeue would bump resourceVersion and fire a watch event each drift tick
+	// even when the zone is already in the desired state.
+	changed := meta.SetStatusCondition(&zone.Status.Conditions, metav1.Condition{
 		Type:               conditionAvailable,
 		Status:             metav1.ConditionTrue,
 		Reason:             "ZoneReady",
 		Message:            "Zone reconciled on the Technitium server",
 		ObservedGeneration: zone.Generation,
 	})
+	if zone.Status.ObservedGeneration != zone.Generation {
+		zone.Status.ObservedGeneration = zone.Generation
+		changed = true
+	}
+	if !zone.Status.ZoneCreated {
+		zone.Status.ZoneCreated = true
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
 
 	return r.Status().Update(ctx, &zone)
 }

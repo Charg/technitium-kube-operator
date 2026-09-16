@@ -156,7 +156,7 @@ var _ = Describe("Zone Controller", func() {
 			createZoneCR(nil)
 			api := &fakeZoneAPI{
 				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
-					return &technitium.ZoneOptions{Name: zone, Type: "Primary"}, nil
+					return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary)}, nil
 				},
 			}
 
@@ -166,12 +166,35 @@ var _ = Describe("Zone Controller", func() {
 			Expect(api.setCalls).To(BeEmpty())
 		})
 
+		It("does not rewrite status on a repeat reconcile of a matching zone", func() {
+			createZoneCR(nil)
+			api := &fakeZoneAPI{
+				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
+					return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary)}, nil
+				},
+			}
+			reconciler := newReconciler(api)
+
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			first := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, first)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			second := &dnsv1alpha1.Zone{}
+			Expect(k8sClient.Get(ctx, key, second)).To(Succeed())
+			Expect(second.ResourceVersion).To(Equal(first.ResourceVersion))
+		})
+
 		It("corrects catalog drift on an existing zone", func() {
 			catalog := "shared"
 			createZoneCR(func(z *dnsv1alpha1.Zone) { z.Spec.Catalog = &catalog })
 			api := &fakeZoneAPI{
 				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
-					return &technitium.ZoneOptions{Name: zone, Type: "Primary", Catalog: "stale"}, nil
+					return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary), Catalog: "stale"}, nil
 				},
 			}
 
