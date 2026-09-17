@@ -94,12 +94,12 @@ type TechnitiumClusterSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// replicas is the number of Technitium instances to run. Only a single
-	// instance is supported in this phase; multi-node clustering is a future
-	// phase, so anything above 1 is rejected at admission.
+	// replicas is the number of independent Technitium instances to
+	// provision, each with its own PersistentVolumeClaim. It does not wire
+	// them into a Technitium cluster (init/join): every replica runs as its
+	// own standalone server until that is implemented.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:XValidation:rule="self <= 1",message="replicas greater than 1 is not supported yet: multi-node clustering is a future phase"
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
@@ -229,9 +229,9 @@ type TechnitiumClusterStatus struct {
 //
 // TechnitiumCluster is cluster-scoped: it owns a Technitium DNS Server
 // workload rather than describing a namespaced tenant resource. One instance
-// of this resource provisions one Technitium node; running several is how a
-// deployment fronts multiple independent Technitium servers, not how a single
-// Technitium instance is scaled (see spec.replicas).
+// of this resource provisions spec.replicas Technitium nodes; running several
+// TechnitiumCluster resources is how a deployment fronts multiple independent
+// groups of Technitium servers.
 type TechnitiumCluster struct {
 	metav1.TypeMeta `json:",inline"`
 
