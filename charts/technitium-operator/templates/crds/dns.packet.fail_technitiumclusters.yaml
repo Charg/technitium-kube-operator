@@ -97,6 +97,20 @@ spec:
                   spec.dnsServerDomain, or "<name>.local" if that is also unset. Only
                   meaningful when spec.replicas is greater than 1.
                 type: string
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  deletionPolicy controls whether the controller gracefully tears down
+                  the in-Technitium cluster state before the owner-reference garbage
+                  collector reaps the workload. "Delete" (the default) removes every
+                  Secondary from the Primary's cluster membership and then deletes the
+                  Primary's own cluster configuration. "Orphan" skips that teardown and
+                  leaves the in-Technitium cluster state as-is, which is useful when the
+                  workload is being migrated or adopted rather than decommissioned.
+                enum:
+                - Delete
+                - Orphan
+                type: string
               dnsServerDomain:
                 description: |-
                   dnsServerDomain sets the Technitium DNS_SERVER_DOMAIN environment
@@ -199,6 +213,19 @@ spec:
                   storage configures the persistent volume backing the Technitium data
                   directory.
                 properties:
+                  retentionPolicy:
+                    default: Retain
+                    description: |-
+                      retentionPolicy controls what happens to the volumeClaimTemplate PVCs
+                      when this TechnitiumCluster is deleted. "Retain" (the default) leaves
+                      them in place: they are not owner-reference garbage collected along
+                      with the StatefulSet, so leaving them requires no special handling,
+                      only restraint. "Delete" removes them as part of the finalizer's
+                      teardown, for callers who want no storage left behind.
+                    enum:
+                    - Retain
+                    - Delete
+                    type: string
                   size:
                     anyOf:
                     - type: integer

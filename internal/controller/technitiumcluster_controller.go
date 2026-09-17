@@ -19,6 +19,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -60,6 +61,13 @@ const (
 // the server's token list as distinct from any human-created token.
 const operatorTokenName = "technitium-operator"
 
+// clusterFinalizer guards the graceful in-Technitium cluster teardown: while
+// it is present, Kubernetes will not remove the TechnitiumCluster object,
+// giving finalizeCluster a chance to remove secondaries and delete the
+// primary's cluster state before ownerRef GC reaps the StatefulSet, Services,
+// and generated Secret.
+const clusterFinalizer = "dns.packet.fail/cluster-cleanup"
+
 // bootstrapAPI is the slice of the Technitium client the bootstrap flow
 // needs. It exists so tests can substitute a fake client without spinning up
 // a real Technitium server.
@@ -76,6 +84,9 @@ type nodeAPI interface {
 	GetClusterState(ctx context.Context) (*technitium.ClusterState, error)
 	InitCluster(ctx context.Context, opts technitium.InitClusterOptions) (*technitium.ClusterState, error)
 	InitJoinCluster(ctx context.Context, opts technitium.InitJoinOptions) (*technitium.ClusterState, error)
+	RemoveSecondary(ctx context.Context, secondaryNodeID int) error
+	DeleteSecondary(ctx context.Context, secondaryNodeID int) error
+	DeletePrimaryCluster(ctx context.Context, force bool) error
 }
 
 // loginNodeClient wraps a *technitium.Client built with WithCredentials so
@@ -117,6 +128,34 @@ func (n *loginNodeClient) InitJoinCluster(ctx context.Context, opts technitium.I
 	return n.Client.InitJoinCluster(ctx, opts)
 }
 
+// RemoveSecondary logs in on first use, then delegates. See GetClusterState
+// for why the login happens here rather than at construction.
+func (n *loginNodeClient) RemoveSecondary(ctx context.Context, secondaryNodeID int) error {
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+	return n.Client.RemoveSecondary(ctx, secondaryNodeID)
+}
+
+// DeleteSecondary logs in on first use, then delegates. See GetClusterState
+// for why the login happens here rather than at construction.
+func (n *loginNodeClient) DeleteSecondary(ctx context.Context, secondaryNodeID int) error {
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+	return n.Client.DeleteSecondary(ctx, secondaryNodeID)
+}
+
+// DeletePrimaryCluster logs in on first use, then delegates. See
+// GetClusterState for why the login happens here rather than at
+// construction.
+func (n *loginNodeClient) DeletePrimaryCluster(ctx context.Context, force bool) error {
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return err
+	}
+	return n.Client.DeletePrimaryCluster(ctx, force)
+}
+
 // ensureLoggedIn mints a session token on first use of this wrapper. It is
 // shared by every method above rather than duplicated inline.
 func (n *loginNodeClient) ensureLoggedIn(ctx context.Context) error {
@@ -137,8 +176,25 @@ func (n *loginNodeClient) ensureLoggedIn(ctx context.Context) error {
 // they are created in the operator's own namespace rather than alongside the
 // CR. A cluster-scoped owner can still own namespaced dependents in any
 // namespace, so controllerutil.SetControllerReference on each object is
-// enough for owner-reference garbage collection to tear them down when the CR
-// is deleted; no finalizer is needed.
+// enough for owner-reference garbage collection to tear down the StatefulSet,
+// Services, and Secret when the CR is deleted.
+//
+// That GC alone leaves two things undone, which is why this reconciler also
+// carries clusterFinalizer. First, a multi-node deployment has cluster
+// membership state living inside Technitium itself (each node's own
+// clusterNodes list), and nothing about deleting the Kubernetes objects tells
+// Technitium a Secondary is gone; the finalizer's job (spec.deletionPolicy
+// Delete, the default) is to remove every Secondary from the Primary and then
+// delete the Primary's own cluster configuration before the workload
+// disappears, so no node is left believing it is still part of a cluster that
+// no longer exists. spec.deletionPolicy Orphan skips that call and leaves
+// whatever in-Technitium state exists, for a caller who is migrating or
+// adopting the workload rather than decommissioning it. Second, the
+// StatefulSet's volumeClaimTemplate PVCs are never owner-reference garbage
+// collected along with the StatefulSet itself (that is a Kubernetes design
+// choice, not an oversight here), so spec.storage.retentionPolicy makes their
+// fate explicit: Retain (the default) leaves them in place, Delete removes
+// them as part of the same finalizer pass.
 type TechnitiumClusterReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -215,6 +271,23 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// A set deletion timestamp means the resource is being torn down: run the
+	// in-Technitium cleanup and drop the finalizer instead of reconciling
+	// desired state.
+	if !tc.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.finalizeCluster(ctx, &tc)
+	}
+
+	// Register the finalizer before touching the workload so a delete that
+	// arrives mid-flight still triggers cleanup. reconcileWorkload only reads
+	// the spec, so it is safe to continue with the same object after the
+	// update.
+	if controllerutil.AddFinalizer(&tc, clusterFinalizer) {
+		if err := r.Update(ctx, &tc); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	sts, err := r.reconcileWorkload(ctx, &tc)
 	if err != nil {
 		log.Error(err, "Failed to reconcile TechnitiumCluster workload", "cluster", tc.Name)
@@ -270,6 +343,129 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	return ctrl.Result{RequeueAfter: requeueAfter}, nil
+}
+
+// finalizeCluster runs the deletion policy and PVC retention policy for a
+// TechnitiumCluster being torn down, then clears the finalizer so
+// owner-reference GC can reap the StatefulSet, Services, and generated
+// Secret. It always removes the finalizer once its own steps have run: the
+// in-Technitium teardown below is best-effort by design (see
+// teardownClusterState), so nothing here can block deletion indefinitely.
+func (r *TechnitiumClusterReconciler) finalizeCluster(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	log := logf.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(tc, clusterFinalizer) {
+		return nil
+	}
+
+	if tc.Spec.DeletionPolicy == dnsv1alpha1.DeletionPolicyOrphan {
+		log.Info("Orphaning TechnitiumCluster: leaving in-Technitium cluster state intact", "cluster", tc.Name)
+	} else {
+		r.teardownClusterState(ctx, tc)
+	}
+
+	if err := r.reconcilePVCRetention(ctx, tc); err != nil {
+		// Unlike the best-effort cluster teardown above, a failure here is
+		// returned and requeued: spec.storage.retentionPolicy Delete is an
+		// explicit request to remove data, and silently dropping that request
+		// on a transient list/delete error (rather than retrying) would leave
+		// PVCs behind with no signal that the intended teardown did not
+		// happen.
+		return err
+	}
+
+	controllerutil.RemoveFinalizer(tc, clusterFinalizer)
+	return r.Update(ctx, tc)
+}
+
+// teardownClusterState best-effort tears down the in-Technitium cluster
+// state: every Secondary is removed from the Primary's membership list, then
+// the Primary's own cluster configuration is deleted. Every step logs and
+// continues on error rather than returning one, which is deliberately
+// different from finalizeZone (which requeues on a delete failure to avoid
+// orphaning a zone that still exists). A Zone's server-side zone is the only
+// copy of that DNS data, so losing track of a failed delete there is a real
+// data-integrity problem worth blocking on; a cluster's in-Technitium
+// membership state is being discarded along with the whole workload
+// regardless of whether this call succeeds; there is no "still exists
+// elsewhere" case to protect, only a courtesy attempt at a clean shutdown
+// before the pods disappear out from under Technitium anyway. Requeuing here
+// would only wedge deletion against an instance that, by definition, is being
+// torn down and may already be unreachable (creds gone, primary pod already
+// terminated).
+func (r *TechnitiumClusterReconciler) teardownClusterState(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) {
+	log := logf.FromContext(ctx)
+
+	username, password, err := r.adminCredentials(ctx, tc)
+	if err != nil {
+		log.Info("Skipping in-Technitium cluster teardown: admin credentials unavailable",
+			"cluster", tc.Name, "error", err.Error())
+		return
+	}
+
+	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, 0, r.OperatorNamespace), username, password)
+	if err != nil {
+		log.Info("Skipping in-Technitium cluster teardown: building primary node client failed",
+			"cluster", tc.Name, "error", err.Error())
+		return
+	}
+
+	state, err := primaryClient.GetClusterState(ctx)
+	if err != nil {
+		log.Info("Skipping in-Technitium cluster teardown: primary cluster state unreachable",
+			"cluster", tc.Name, "error", err.Error())
+		return
+	}
+	if !state.ClusterInitialized {
+		log.Info("Skipping in-Technitium cluster teardown: primary has no cluster initialized",
+			"cluster", tc.Name)
+		return
+	}
+
+	for _, node := range state.Nodes {
+		if node.Type != "Secondary" {
+			continue
+		}
+		if err := primaryClient.RemoveSecondary(ctx, node.ID); err != nil {
+			log.Info("Best-effort removeSecondary failed", "cluster", tc.Name, "node", node.Name, "error", err.Error())
+		}
+		if err := primaryClient.DeleteSecondary(ctx, node.ID); err != nil {
+			log.Info("Best-effort deleteSecondary failed", "cluster", tc.Name, "node", node.Name, "error", err.Error())
+		}
+	}
+
+	if err := primaryClient.DeletePrimaryCluster(ctx, true); err != nil {
+		log.Info("Best-effort deletePrimaryCluster failed", "cluster", tc.Name, "error", err.Error())
+		return
+	}
+	log.Info("Tore down in-Technitium cluster state", "cluster", tc.Name)
+}
+
+// reconcilePVCRetention applies spec.storage.retentionPolicy on delete. The
+// volumeClaimTemplate PVCs are addressed by instanceLabels rather than by
+// reconstructing "data-<name>-<ordinal>" names: listing by label is robust to
+// however many ordinals actually got PVCs provisioned, without the caller
+// needing to know desiredReplicas at teardown time.
+func (r *TechnitiumClusterReconciler) reconcilePVCRetention(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	log := logf.FromContext(ctx)
+
+	if tc.Spec.Storage.RetentionPolicy != dnsv1alpha1.PVCRetentionPolicyDelete {
+		log.Info("Retaining TechnitiumCluster data PVCs", "cluster", tc.Name)
+		return nil
+	}
+
+	var pvcs corev1.PersistentVolumeClaimList
+	if err := r.List(ctx, &pvcs, client.InNamespace(r.OperatorNamespace), client.MatchingLabels(instanceLabels(tc.Name))); err != nil {
+		return fmt.Errorf("listing data PVCs for %s: %w", tc.Name, err)
+	}
+
+	for i := range pvcs.Items {
+		if err := r.Delete(ctx, &pvcs.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting PVC %s: %w", pvcs.Items[i].Name, err)
+		}
+	}
+	log.Info("Deleted TechnitiumCluster data PVCs", "cluster", tc.Name, "count", len(pvcs.Items))
+	return nil
 }
 
 // ensureToken mints a durable API token for a bootstrapped instance and

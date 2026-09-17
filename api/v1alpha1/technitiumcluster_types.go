@@ -64,6 +64,25 @@ const (
 	TechnitiumClusterConditionDegraded = "Degraded"
 )
 
+// PVCRetentionPolicy controls what happens to the StatefulSet's
+// volumeClaimTemplate PersistentVolumeClaims when a TechnitiumCluster is
+// deleted.
+// +kubebuilder:validation:Enum=Retain;Delete
+type PVCRetentionPolicy string
+
+const (
+	// PVCRetentionPolicyRetain leaves the data PVCs in place on CR deletion.
+	// StatefulSet volumeClaimTemplate PVCs are not owner-reference garbage
+	// collected along with the StatefulSet itself, so this is the safer
+	// default: an operator who deletes the wrong TechnitiumCluster by mistake
+	// still has the zone data and DNSSEC keys sitting in an orphaned PVC
+	// rather than gone.
+	PVCRetentionPolicyRetain PVCRetentionPolicy = "Retain"
+	// PVCRetentionPolicyDelete removes the data PVCs as part of an
+	// intentional teardown.
+	PVCRetentionPolicyDelete PVCRetentionPolicy = "Delete"
+)
+
 // TechnitiumClusterStorageSpec configures the persistent volume backing the
 // Technitium data directory.
 type TechnitiumClusterStorageSpec struct {
@@ -76,6 +95,16 @@ type TechnitiumClusterStorageSpec struct {
 	// it unset defers to the cluster's default StorageClass.
 	// +optional
 	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// retentionPolicy controls what happens to the volumeClaimTemplate PVCs
+	// when this TechnitiumCluster is deleted. "Retain" (the default) leaves
+	// them in place: they are not owner-reference garbage collected along
+	// with the StatefulSet, so leaving them requires no special handling,
+	// only restraint. "Delete" removes them as part of the finalizer's
+	// teardown, for callers who want no storage left behind.
+	// +kubebuilder:default=Retain
+	// +optional
+	RetentionPolicy PVCRetentionPolicy `json:"retentionPolicy,omitempty"`
 }
 
 // TechnitiumClusterServiceSpec configures the Service that fronts the
@@ -145,6 +174,17 @@ type TechnitiumClusterSpec struct {
 	// meaningful when spec.replicas is greater than 1.
 	// +optional
 	ClusterDomain string `json:"clusterDomain,omitempty"`
+
+	// deletionPolicy controls whether the controller gracefully tears down
+	// the in-Technitium cluster state before the owner-reference garbage
+	// collector reaps the workload. "Delete" (the default) removes every
+	// Secondary from the Primary's cluster membership and then deletes the
+	// Primary's own cluster configuration. "Orphan" skips that teardown and
+	// leaves the in-Technitium cluster state as-is, which is useful when the
+	// workload is being migrated or adopted rather than decommissioned.
+	// +kubebuilder:default=Delete
+	// +optional
+	DeletionPolicy DeletionPolicy `json:"deletionPolicy,omitempty"`
 }
 
 // TechnitiumClusterNodeStatus reports one StatefulSet ordinal's observed

@@ -15,6 +15,46 @@ import (
 	"time"
 )
 
+// RemoveSecondary drops a Secondary from the Primary's cluster membership
+// list. It is the first of the two calls a graceful secondary teardown
+// makes; DeleteSecondary removes the node's remaining configuration record.
+// Run against the Primary node.
+func (c *Client) RemoveSecondary(ctx context.Context, secondaryNodeID int) error {
+	params := url.Values{}
+	params.Set("secondaryNodeId", strconv.Itoa(secondaryNodeID))
+	return c.do(ctx, "/api/admin/cluster/primary/removeSecondary", params, nil)
+}
+
+// DeleteSecondary deletes a Secondary's node record from the Primary's
+// cluster configuration. Run against the Primary node, after RemoveSecondary.
+func (c *Client) DeleteSecondary(ctx context.Context, secondaryNodeID int) error {
+	params := url.Values{}
+	params.Set("secondaryNodeId", strconv.Itoa(secondaryNodeID))
+	return c.do(ctx, "/api/admin/cluster/primary/deleteSecondary", params, nil)
+}
+
+// DeletePrimaryCluster deletes the cluster configuration on the calling
+// (Primary) node. force skips Technitium's own check that every Secondary has
+// already been detached, which the operator relies on for best-effort
+// teardown: a Secondary the controller could not reach must not block the
+// Primary's own state from being cleared.
+func (c *Client) DeletePrimaryCluster(ctx context.Context, force bool) error {
+	params := url.Values{}
+	params.Set("forceDelete", strconv.FormatBool(force))
+	return c.do(ctx, "/api/admin/cluster/primary/delete", params, nil)
+}
+
+// LeaveCluster instructs the calling (Secondary) node to leave the cluster it
+// has joined. It is provided for completeness even though the operator's own
+// finalizer drives teardown from the Primary side (RemoveSecondary then
+// DeleteSecondary): that is the node the finalizer can still reach once a
+// Secondary pod is already gone, which is the common case during teardown.
+func (c *Client) LeaveCluster(ctx context.Context, force bool) error {
+	params := url.Values{}
+	params.Set("forceLeave", strconv.FormatBool(force))
+	return c.do(ctx, "/api/admin/cluster/secondary/leave", params, nil)
+}
+
 // ClusterNode is a single member reported by /api/admin/cluster/state once a
 // cluster is initialized. Type distinguishes the Primary (the node the
 // cluster was initialized on) from Secondary members; State reflects the

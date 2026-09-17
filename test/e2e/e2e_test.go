@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -402,10 +403,38 @@ var _ = Describe("Manager", Ordered, func() {
 			}
 			Eventually(verifyZoneGone, time.Minute, 2*time.Second).Should(Succeed())
 
+			By("recording the data PVCs before deleting the clustered TechnitiumCluster")
+			cmd = exec.Command("kubectl", "get", "pvc", "-n", namespace,
+				"-l", "app.kubernetes.io/instance="+clusteredClusterName,
+				"-o", "jsonpath={.items[*].metadata.name}")
+			pvcOutput, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			dataPVCs := strings.Fields(pvcOutput)
+			Expect(dataPVCs).NotTo(BeEmpty(), "expected one data PVC per replica before deletion")
+
 			By("deleting the clustered TechnitiumCluster")
+			// spec.deletionPolicy defaults to Delete: the finalizer removes
+			// each Secondary from the Primary and deletes the Primary's own
+			// cluster configuration before the workload is reaped, which is
+			// what --wait completing here actually proves (a stuck teardown
+			// call would otherwise wedge the finalizer and this delete would
+			// time out).
 			cmd = exec.Command("kubectl", "delete", "technitiumcluster", clusteredClusterName, "--wait=true", "--timeout=90s")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "TechnitiumCluster deletion did not complete")
+
+			By("verifying the data PVCs survived, since spec.storage.retentionPolicy defaults to Retain")
+			for _, pvcName := range dataPVCs {
+				cmd := exec.Command("kubectl", "get", "pvc", pvcName, "-n", namespace)
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "data PVC %q should have been retained", pvcName)
+			}
+
+			By("cleaning up the retained data PVCs")
+			cmd = exec.Command("kubectl", "delete", "pvc", "-n", namespace,
+				"-l", "app.kubernetes.io/instance="+clusteredClusterName, "--wait=true", "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 })

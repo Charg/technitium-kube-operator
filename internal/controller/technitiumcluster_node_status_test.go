@@ -42,6 +42,15 @@ type fakeNodeClient struct {
 	joinCalls *int
 	joinErr   error
 	joinState *technitium.ClusterState
+
+	removeSecondaryCalls *int
+	removeSecondaryIDs   *[]int
+	removeSecondaryErr   error
+	deleteSecondaryCalls *int
+	deleteSecondaryIDs   *[]int
+	deleteSecondaryErr   error
+	deletePrimaryCalls   *int
+	deletePrimaryErr     error
 }
 
 func (f *fakeNodeClient) GetClusterState(ctx context.Context) (*technitium.ClusterState, error) {
@@ -72,6 +81,33 @@ func (f *fakeNodeClient) InitJoinCluster(ctx context.Context, opts technitium.In
 		return f.joinState, nil
 	}
 	return f.state, nil
+}
+
+func (f *fakeNodeClient) RemoveSecondary(ctx context.Context, secondaryNodeID int) error {
+	if f.removeSecondaryCalls != nil {
+		*f.removeSecondaryCalls++
+	}
+	if f.removeSecondaryIDs != nil {
+		*f.removeSecondaryIDs = append(*f.removeSecondaryIDs, secondaryNodeID)
+	}
+	return f.removeSecondaryErr
+}
+
+func (f *fakeNodeClient) DeleteSecondary(ctx context.Context, secondaryNodeID int) error {
+	if f.deleteSecondaryCalls != nil {
+		*f.deleteSecondaryCalls++
+	}
+	if f.deleteSecondaryIDs != nil {
+		*f.deleteSecondaryIDs = append(*f.deleteSecondaryIDs, secondaryNodeID)
+	}
+	return f.deleteSecondaryErr
+}
+
+func (f *fakeNodeClient) DeletePrimaryCluster(ctx context.Context, force bool) error {
+	if f.deletePrimaryCalls != nil {
+		*f.deletePrimaryCalls++
+	}
+	return f.deletePrimaryErr
 }
 
 var _ = Describe("TechnitiumCluster Controller node status", func() {
