@@ -20,6 +20,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -448,9 +449,31 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 		PeriodSeconds:       10,
 	}
 
+	// Run under the restricted Pod Security Standard so the workload schedules in
+	// namespaces that enforce it. Technitium binds port 53, so drop all
+	// capabilities and add back only NET_BIND_SERVICE. runAsUser/fsGroup 1000
+	// let a non-root process own the persistent data volume.
+	const nonRootUID = int64(1000)
+	podSecurityContext := &corev1.PodSecurityContext{
+		RunAsNonRoot:   ptr.To(true),
+		RunAsUser:      ptr.To(nonRootUID),
+		RunAsGroup:     ptr.To(nonRootUID),
+		FSGroup:        ptr.To(nonRootUID),
+		SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+	containerSecurityContext := &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		RunAsNonRoot:             ptr.To(true),
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+			Add:  []corev1.Capability{"NET_BIND_SERVICE"},
+		},
+	}
+
 	return corev1.PodTemplateSpec{
 		Labels: commonLabels(tc.Name),
 		Spec: corev1.PodSpec{
+			SecurityContext: podSecurityContext,
 			Containers: []corev1.Container{
 				{
 					Name:  "dns-server",
@@ -465,9 +488,16 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "data", MountPath: "/etc/dns"},
 						{Name: "admin", MountPath: "/etc/technitium/admin", ReadOnly: true},
+						// Technitium writes logs to /var/log/technitium and uses
+						// /tmp, both on the read-only-friendly root filesystem a
+						// non-root process cannot create under. Back them with
+						// ephemeral volumes the fsGroup can write.
+						{Name: "varlog", MountPath: "/var/log/technitium"},
+						{Name: "tmp", MountPath: "/tmp"},
 					},
-					ReadinessProbe: probe,
-					LivenessProbe:  probe,
+					ReadinessProbe:  probe,
+					LivenessProbe:   probe,
+					SecurityContext: containerSecurityContext,
 				},
 			},
 			Volumes: []corev1.Volume{
@@ -480,6 +510,8 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 						},
 					},
 				},
+				{Name: "varlog", EmptyDir: &corev1.EmptyDirVolumeSource{}},
+				{Name: "tmp", EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			},
 		},
 	}

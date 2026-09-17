@@ -25,106 +25,43 @@ import (
 // managerDeployment is the controller-manager Deployment created by `just deploy`.
 const managerDeployment = "technitium-operator-controller-manager"
 
-// stubName is the in-cluster Technitium API stub the operator reconciles against.
-const stubName = "technitium-stub"
+// clusterName is the TechnitiumCluster the operator provisions and reconciles Zones against.
+const clusterName = "e2e-dns"
 
-// technitiumStubManifest deploys a tiny HTTP server that answers every Technitium
-// API call with an ok envelope. That is all the reconciler needs to create a zone
-// (an ok GetZoneOptions is treated as "already present"), keep it Ready, and
-// delete it. Running a full Technitium server is unnecessary and slower for an
-// end to end check of the operator's own behavior. The pod satisfies the
-// namespace's restricted Pod Security Standard.
-var technitiumStubManifest = fmt.Sprintf(`
-apiVersion: apps/v1
-kind: Deployment
+// deployTechnitiumCluster applies a TechnitiumCluster and waits for the operator to
+// provision the StatefulSet, boot the server, mint an API token, and report Ready.
+// The workload lands in the operator's namespace (POD_NAMESPACE). A real Technitium
+// server runs here so a Ready Zone proves the operator drove the actual server API.
+func deployTechnitiumCluster(name string) {
+	manifest := fmt.Sprintf(`
+apiVersion: dns.packet.fail/v1alpha1
+kind: TechnitiumCluster
 metadata:
-  name: %[1]s
-  namespace: %[2]s
-  labels:
-    app: %[1]s
+  name: %s
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: %[1]s
-  template:
-    metadata:
-      labels:
-        app: %[1]s
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-      - name: stub
-        image: hashicorp/http-echo:1.0.0
-        args:
-        - -listen=:5380
-        - '-text={"status":"ok"}'
-        ports:
-        - containerPort: 5380
-        securityContext:
-          readOnlyRootFilesystem: true
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: %[1]s
-  namespace: %[2]s
-spec:
-  selector:
-    app: %[1]s
-  ports:
-  - port: 5380
-    targetPort: 5380
-`, stubName, namespace)
+  image: technitium/dns-server:15.4.0
+  storage:
+    size: 1Gi
+`, name)
+	applyManifest("cluster-"+name, manifest)
 
-// deployTechnitiumStub applies the stub and waits for it to become available.
-func deployTechnitiumStub() {
-	applyManifest("technitium-stub", technitiumStubManifest)
+	// Ready gates on image pull, first boot, and token creation, so it is the
+	// slowest step in the suite. Docker Hub pulls dominate the budget in CI.
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "technitiumcluster", name,
+			"-o", "jsonpath={.status.phase}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).To(Equal("Ready"), "TechnitiumCluster phase not Ready yet")
+	}, 6*time.Minute, 5*time.Second).Should(Succeed())
 
-	cmd := exec.Command("kubectl", "rollout", "status", "deployment/"+stubName,
-		"-n", namespace, "--timeout=120s")
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Technitium stub did not become ready")
-}
-
-// pointOperatorAtStub rewrites the manager container args to reach the in-cluster
-// stub, then waits for the new pod to roll out. The manager reads the credentials
-// Secret and server URL at startup, so the change takes effect on restart.
-func pointOperatorAtStub() {
-	stubURL := fmt.Sprintf("http://%s.%s.svc:5380", stubName, namespace)
-	args := []string{
-		"--leader-elect",
-		"--health-probe-bind-address=:8081",
-		"--webhook-cert-path=/tmp/k8s-webhook-server/serving-certs",
-		"--technitium-url=" + stubURL,
-		"--technitium-credentials-secret=technitium-operator-credentials",
-	}
-	patch := fmt.Sprintf(
-		`[{"op":"replace","path":"/spec/template/spec/containers/0/args","value":[%s]}]`,
-		quoteJSONList(args))
-
-	cmd := exec.Command("kubectl", "patch", "deployment", managerDeployment,
-		"-n", namespace, "--type=json", "-p", patch)
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to repoint the operator at the stub")
-
-	cmd = exec.Command("kubectl", "rollout", "status", "deployment/"+managerDeployment,
-		"-n", namespace, "--timeout=120s")
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Operator did not roll out after repointing")
-
-	// The webhook server in the new pod comes up shortly after the pod is Ready.
-	// Wait for its Service to have a ready endpoint so an apply is not rejected by
-	// a failurePolicy=Fail webhook that is momentarily unreachable.
-	waitForWebhookEndpointReady()
+	// A token in the admin Secret confirms the operator bootstrapped against the
+	// real server, not just that the workload rolled out.
+	cmd := exec.Command("kubectl", "get", "secret", name+"-admin", "-n", namespace,
+		"-o", "jsonpath={.data.token}")
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "admin Secret not found")
+	Expect(output).NotTo(BeEmpty(), "admin Secret carries no API token")
 }
 
 // waitForWebhookEndpointReady blocks until the webhook Service has a ready
@@ -140,21 +77,23 @@ func waitForWebhookEndpointReady() {
 	}, 2*time.Minute, 2*time.Second).Should(Succeed())
 }
 
-// applyZone creates a Primary Zone CR with the given resource and zone names.
-func applyZone(name, zoneName string) {
+// applyZone creates a Primary Zone CR targeting the given TechnitiumCluster.
+func applyZone(name, zoneName, serverRef string) {
 	manifest := fmt.Sprintf(`
 apiVersion: dns.packet.fail/v1alpha1
 kind: Zone
 metadata:
   name: %s
 spec:
+  serverRef:
+    name: %s
   zoneName: %s
   type: Primary
-`, name, zoneName)
+`, name, serverRef, zoneName)
 	path := writeManifest("zone-"+name, manifest)
 
-	// The admission webhook can still be settling right after a rollout, so retry
-	// until the apply is accepted rather than failing on a transient dial error.
+	// The admission webhook can still be settling, so retry until the apply is
+	// accepted rather than failing on a transient dial error.
 	Eventually(func(g Gomega) {
 		cmd := exec.Command("kubectl", "apply", "-f", path)
 		_, err := utils.Run(cmd)
@@ -174,17 +113,4 @@ func writeManifest(name, manifest string) string {
 	path := filepath.Join(os.TempDir(), name+".yaml")
 	Expect(os.WriteFile(path, []byte(manifest), 0o644)).To(Succeed())
 	return path
-}
-
-// quoteJSONList renders a string slice as a comma-separated list of JSON string
-// literals for embedding in a JSON patch.
-func quoteJSONList(items []string) string {
-	out := ""
-	for i, item := range items {
-		if i > 0 {
-			out += ","
-		}
-		out += fmt.Sprintf("%q", item)
-	}
-	return out
 }

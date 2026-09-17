@@ -64,6 +64,7 @@ var _ = Describe("Zone Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 		const zoneName = "example.com"
+		const serverName = "test-server"
 
 		ctx := context.Background()
 
@@ -72,16 +73,22 @@ var _ = Describe("Zone Controller", func() {
 
 		newReconciler := func(api *fakeZoneAPI) *ZoneReconciler {
 			return &ZoneReconciler{
-				Client:     k8sClient,
-				Scheme:     k8sClient.Scheme(),
-				Technitium: api,
+				Client:            k8sClient,
+				Scheme:            k8sClient.Scheme(),
+				OperatorNamespace: "default",
+				NewServerClient: func(_ context.Context, _ dnsv1alpha1.SecretReference) (ZoneAPI, error) {
+					return api, nil
+				},
 			}
 		}
 
 		createZoneCR := func(mutate func(*dnsv1alpha1.Zone)) {
 			resource := &dnsv1alpha1.Zone{
 				Name: resourceName,
-				Spec: dnsv1alpha1.ZoneSpec{ZoneName: zoneName},
+				Spec: dnsv1alpha1.ZoneSpec{
+					ZoneName:  zoneName,
+					ServerRef: dnsv1alpha1.SecretReference{Name: serverName},
+				},
 			}
 			if mutate != nil {
 				mutate(resource)

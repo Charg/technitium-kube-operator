@@ -63,6 +63,12 @@ type ZoneSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="zoneName is immutable"
 	ZoneName string `json:"zoneName"`
 
+	// serverRef names the TechnitiumCluster this zone is created on. The
+	// referenced instance must be Ready. Only name is used: a TechnitiumCluster
+	// is cluster-scoped, so the webhook rejects serverRef.namespace if set.
+	// +required
+	ServerRef SecretReference `json:"serverRef"`
+
 	// type is the category of zone to create on the Technitium server.
 	// +kubebuilder:default=Primary
 	// +optional

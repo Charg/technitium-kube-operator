@@ -10,9 +10,13 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,6 +26,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+	"github.com/charg/technitium-operator/internal/config"
 	"github.com/charg/technitium-operator/internal/technitium"
 )
 
@@ -54,18 +59,44 @@ type ZoneAPI interface {
 // from Technitium before the resource disappears.
 const zoneFinalizer = "dns.packet.fail/zone-cleanup"
 
+// cachedServerClient is one entry in ZoneReconciler's client cache: a built
+// ZoneAPI plus the resourceVersion of the admin Secret it was built from. The
+// resourceVersion is the invalidation key, so a token rotation (or a Secret
+// recreated with a new one) rebuilds the client on the next reconcile instead
+// of reusing stale credentials indefinitely.
+type cachedServerClient struct {
+	secretResourceVersion string
+	api                   ZoneAPI
+}
+
 // ZoneReconciler reconciles a Zone object
 type ZoneReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// Technitium reconciles zones against the DNS server. It is constructed once
-	// at startup and shared across reconciles.
-	Technitium ZoneAPI
+	// OperatorNamespace is where a TechnitiumCluster's admin Secret lives when
+	// its spec does not override the namespace. It is the operator's own
+	// namespace (POD_NAMESPACE), matching the TechnitiumCluster controller.
+	OperatorNamespace string
+	// NewServerClient resolves a Zone's serverRef to a client for that managed
+	// instance. It is a seam so tests inject a fake; production leaves it nil
+	// and defaultServerClient resolves the TechnitiumCluster endpoint + admin
+	// Secret and builds a real client.
+	NewServerClient func(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (ZoneAPI, error)
+
+	// clientCacheMu guards clientCache. Reconcile runs are not necessarily
+	// serialized (controller-runtime workers), so the cache needs its own lock
+	// rather than relying on the caller.
+	clientCacheMu sync.Mutex
+	// clientCache holds one built client per TechnitiumCluster name, so a
+	// routine drift reconcile reuses the existing client instead of re-reading
+	// the Secret and reconstructing it every time.
+	clientCache map[string]cachedServerClient
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=zones/finalizers,verbs=update
+// +kubebuilder:rbac:groups=dns.packet.fail,resources=technitiumclusters,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 // Reconcile ensures the Technitium zone matches the Zone spec: it creates the
@@ -109,6 +140,96 @@ func (r *ZoneReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{RequeueAfter: driftReconcileInterval}, nil
 }
 
+// serverClientFor resolves a Zone's serverRef to a ZoneAPI, preferring the
+// injected NewServerClient seam over the production resolver.
+func (r *ZoneReconciler) serverClientFor(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (ZoneAPI, error) {
+	if r.NewServerClient != nil {
+		return r.NewServerClient(ctx, serverRef)
+	}
+	return r.defaultServerClient(ctx, serverRef)
+}
+
+// defaultServerClient resolves a TechnitiumCluster's endpoint and admin
+// Secret and builds a real Technitium client for it, caching the result by
+// the Secret's resourceVersion so a routine reconcile does not re-login on
+// every pass.
+func (r *ZoneReconciler) defaultServerClient(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (ZoneAPI, error) {
+	var tc dnsv1alpha1.TechnitiumCluster
+	if err := r.Get(ctx, client.ObjectKey{Name: serverRef.Name}, &tc); err != nil {
+		// Wrapped rather than replaced so apierrors.IsNotFound still recognizes
+		// it; finalizeZone depends on that to tell "server is gone" apart from
+		// any other resolve failure.
+		return nil, fmt.Errorf("getting TechnitiumCluster %q: %w", serverRef.Name, err)
+	}
+
+	if tc.Status.Endpoint == "" {
+		return nil, fmt.Errorf("TechnitiumCluster %q is not ready yet: no endpoint reported", serverRef.Name)
+	}
+
+	secretNamespace := r.OperatorNamespace
+	secretName := adminSecretName(tc.Name)
+	if tc.Spec.AdminSecretRef != nil {
+		secretName = tc.Spec.AdminSecretRef.Name
+		if tc.Spec.AdminSecretRef.Namespace != "" {
+			secretNamespace = tc.Spec.AdminSecretRef.Namespace
+		}
+	}
+	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
+
+	var secret corev1.Secret
+	if err := r.Get(ctx, secretKey, &secret); err != nil {
+		return nil, fmt.Errorf("getting admin secret %s for TechnitiumCluster %q: %w", secretKey, serverRef.Name, err)
+	}
+
+	if len(secret.Data[adminSecretTokenKey]) == 0 {
+		return nil, fmt.Errorf("TechnitiumCluster %q is not bootstrapped yet: admin secret %s has no token",
+			serverRef.Name, secretKey)
+	}
+
+	if cached, ok := r.cachedClient(tc.Name, secret.ResourceVersion); ok {
+		return cached, nil
+	}
+
+	opts, err := config.ClientOptionsFromSecret(&secret)
+	if err != nil {
+		return nil, err
+	}
+
+	api, err := technitium.NewClient(tc.Status.Endpoint, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("building Technitium client for %q: %w", serverRef.Name, err)
+	}
+
+	r.cacheClient(tc.Name, secret.ResourceVersion, api)
+	return api, nil
+}
+
+// cachedClient returns the cached client for clusterName when its Secret
+// resourceVersion still matches, so the caller knows the credentials have not
+// rotated since the client was built.
+func (r *ZoneReconciler) cachedClient(clusterName, secretResourceVersion string) (ZoneAPI, bool) {
+	r.clientCacheMu.Lock()
+	defer r.clientCacheMu.Unlock()
+
+	entry, ok := r.clientCache[clusterName]
+	if !ok || entry.secretResourceVersion != secretResourceVersion {
+		return nil, false
+	}
+	return entry.api, true
+}
+
+// cacheClient stores a freshly built client under clusterName, keyed for
+// invalidation by the admin Secret's resourceVersion at build time.
+func (r *ZoneReconciler) cacheClient(clusterName, secretResourceVersion string, api ZoneAPI) {
+	r.clientCacheMu.Lock()
+	defer r.clientCacheMu.Unlock()
+
+	if r.clientCache == nil {
+		r.clientCache = make(map[string]cachedServerClient)
+	}
+	r.clientCache[clusterName] = cachedServerClient{secretResourceVersion: secretResourceVersion, api: api}
+}
+
 // finalizeZone removes the zone from the server (unless orphaned) and then clears
 // the finalizer. The finalizer is only removed once the server-side delete has
 // confirmed, so a failed delete requeues with the resource still intact rather
@@ -123,12 +244,27 @@ func (r *ZoneReconciler) finalizeZone(ctx context.Context, zone *dnsv1alpha1.Zon
 	if zone.Spec.DeletionPolicy == dnsv1alpha1.DeletionPolicyOrphan {
 		log.Info("Orphaning Zone: leaving the server-side zone in place", "zone", zone.Spec.ZoneName)
 	} else {
-		if err := r.Technitium.DeleteZone(ctx, zone.Spec.ZoneName); err != nil {
-			if !errors.Is(err, technitium.ErrZoneNotFound) {
-				return err
+		api, err := r.serverClientFor(ctx, zone.Spec.ServerRef)
+		switch {
+		case err == nil:
+			if err := api.DeleteZone(ctx, zone.Spec.ZoneName); err != nil {
+				if !errors.Is(err, technitium.ErrZoneNotFound) {
+					return err
+				}
 			}
+			log.Info("Deleted Zone from the Technitium server", "zone", zone.Spec.ZoneName)
+		case apierrors.IsNotFound(err):
+			// The TechnitiumCluster itself is gone, so whatever zones it served
+			// are gone with it: there is nothing left to delete, and waiting for
+			// it to come back would orphan this finalizer forever.
+			log.Info("TechnitiumCluster for Zone is gone; skipping server-side delete",
+				"zone", zone.Spec.ZoneName, "server", zone.Spec.ServerRef.Name)
+		default:
+			// Not ready, not bootstrapped, or some other resolve failure: requeue
+			// and retry rather than dropping the finalizer and potentially
+			// orphaning a zone that still exists on the server.
+			return err
 		}
-		log.Info("Deleted Zone from the Technitium server", "zone", zone.Spec.ZoneName)
 	}
 
 	controllerutil.RemoveFinalizer(zone, zoneFinalizer)
@@ -142,15 +278,20 @@ func (r *ZoneReconciler) reconcileZone(ctx context.Context, zone *dnsv1alpha1.Zo
 	log := logf.FromContext(ctx)
 	name := zone.Spec.ZoneName
 
-	current, err := r.Technitium.GetZoneOptions(ctx, name)
+	api, err := r.serverClientFor(ctx, zone.Spec.ServerRef)
+	if err != nil {
+		return err
+	}
+
+	current, err := api.GetZoneOptions(ctx, name)
 	switch {
 	case err == nil:
-		return r.reconcileOptions(ctx, zone, current)
+		return r.reconcileOptions(ctx, api, zone, current)
 	case !errors.Is(err, technitium.ErrZoneNotFound):
 		return err
 	}
 
-	if err := r.Technitium.CreateZone(ctx, createOptionsFromSpec(zone)); err != nil {
+	if err := api.CreateZone(ctx, createOptionsFromSpec(zone)); err != nil {
 		// A concurrent create (another replica, a manual action) races us to the
 		// same zone; treat that as the success it effectively is.
 		if !errors.Is(err, technitium.ErrZoneAlreadyExists) {
@@ -165,7 +306,7 @@ func (r *ZoneReconciler) reconcileZone(ctx context.Context, zone *dnsv1alpha1.Zo
 
 // reconcileOptions corrects drift on a zone that already exists. Only options the
 // server reports back through GetZoneOptions can be reconciled.
-func (r *ZoneReconciler) reconcileOptions(ctx context.Context, zone *dnsv1alpha1.Zone, current *technitium.ZoneOptions) error {
+func (r *ZoneReconciler) reconcileOptions(ctx context.Context, api ZoneAPI, zone *dnsv1alpha1.Zone, current *technitium.ZoneOptions) error {
 	log := logf.FromContext(ctx)
 	name := zone.Spec.ZoneName
 
@@ -185,7 +326,7 @@ func (r *ZoneReconciler) reconcileOptions(ctx context.Context, zone *dnsv1alpha1
 		return nil
 	}
 
-	if err := r.Technitium.SetZoneOptions(ctx, name, update); err != nil {
+	if err := api.SetZoneOptions(ctx, name, update); err != nil {
 		return err
 	}
 

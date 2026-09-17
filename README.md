@@ -2,60 +2,35 @@
 A Kubernetes operator that manages Technitium DNS Server zones as custom resources.
 
 ## Description
-The operator reconciles `Zone` resources (API group `dns.packet.fail/v1alpha1`) against a Technitium DNS Server, keeping DNS zones declared in the cluster in sync with the server. Manage DNS state with kubectl and GitOps instead of the Technitium admin console.
+The operator provisions Technitium DNS Server instances (`TechnitiumCluster`, API group `dns.packet.fail/v1alpha1`) and reconciles `Zone` resources against them, keeping DNS zones declared in the cluster in sync with the server. Manage DNS state with kubectl and GitOps instead of the Technitium admin console.
 
-## Configuration
-The operator needs a Technitium DNS Server URL and credentials to reconcile `Zone` resources. Credentials are read from a Kubernetes Secret, never from a CR or ConfigMap.
+## TechnitiumCluster resource
+A `TechnitiumCluster` provisions a Technitium DNS Server instance: a StatefulSet, a client Service, and (unless `spec.adminSecretRef` is set) a generated `<name>-admin` Secret holding its credentials. It is cluster-scoped, and its status reports `endpoint` once the instance is reachable.
 
-| Flag | Env var | Meaning | Required |
-| --- | --- | --- | --- |
-| `--technitium-url` | `TECHNITIUM_URL` | Base URL of the Technitium DNS Server, e.g. `https://dns.internal:5380`. | Yes |
-| `--technitium-credentials-secret` | `TECHNITIUM_CREDENTIALS_SECRET` | Name of the Secret holding credentials. | Yes |
-| `--technitium-credentials-namespace` | `TECHNITIUM_CREDENTIALS_NAMESPACE` (falls back to `POD_NAMESPACE`) | Namespace of the credentials Secret. Defaults to the operator's own namespace. | No |
-| `--technitium-insecure-skip-verify` | `TECHNITIUM_INSECURE_SKIP_VERIFY` | Skip TLS verification (self-signed certs). | No |
-
-A flag overrides its env var when both are set.
-
-The credentials Secret must contain either a `token` key (a pre-created Technitium API token) or both `username` and `password` keys.
-
-Token form:
-
-```sh
-kubectl create secret generic technitium-creds \
-  --from-literal=token=<api-token>
+```yaml
+apiVersion: dns.packet.fail/v1alpha1
+kind: TechnitiumCluster
+metadata:
+  name: dns
+spec:
+  storage:
+    size: 1Gi
 ```
-
-Username/password is the alternative:
-
-```sh
-kubectl create secret generic technitium-creds \
-  --from-literal=username=<user> \
-  --from-literal=password=<pass>
-```
-
-Helm install, setting the URL and pointing at the Secret:
-
-```sh
-helm install technitium-operator ./charts/technitium-operator \
-  --set technitium.url=https://dns.internal:5380 \
-  --set technitium.existingSecret=technitium-creds
-```
-
-The manager exits at startup with a descriptive error if the URL or credentials Secret is missing.
 
 ## Zone resource
-A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zone namespace, so `zoneName` must be unique across the whole cluster rather than per Kubernetes namespace.
+A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zone namespace, so `zoneName` must be unique across the whole cluster rather than per Kubernetes namespace. Every `Zone` names the `TechnitiumCluster` it belongs to via `spec.serverRef.name`; the reconciler resolves that instance's endpoint and admin credentials on its own, so nothing further needs configuring.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `zoneName` | string | Yes | Fully qualified DNS name of the zone, e.g. `example.com`. Immutable: the API server rejects any update that changes it. Delete and recreate the resource to rename a zone. |
+| `serverRef.name` | string | Yes | Name of the `TechnitiumCluster` this zone is created on. The instance must be Ready. |
 | `type` | enum | No (default `Primary`) | One of `Primary`, `Secondary`, `Stub`, `Forwarder`, `Catalog`. |
 | `primaryNameServerAddresses` | []string | No | IP addresses or hostnames of the upstream primary. Used by `Secondary` and `Stub` zones, ignored by other types. |
 | `forwarder` | string | No | Address of the upstream resolver for a `Forwarder` zone. The special value `this-server` forwards to the local DNS server. Ignored by other types. |
 | `forwarderProtocol` | enum | No | Transport to the forwarder: `Udp`, `Tcp`, `Tls`, `Https`, `Quic`. Applies to `Forwarder` zones only; defaults to `Udp` on the server when unset. |
 | `catalog` | string | No | Name of an existing catalog zone this zone joins as a member. Applies to `Primary`, `Secondary`, `Stub`, and `Forwarder` zones. |
 
-Minimal Primary zone, once the server URL and credentials Secret from [Configuration](#configuration) are in place:
+Minimal Primary zone, once the `TechnitiumCluster` above is Ready:
 
 ```yaml
 apiVersion: dns.packet.fail/v1alpha1
@@ -64,6 +39,8 @@ metadata:
   name: example-com
 spec:
   zoneName: example.com
+  serverRef:
+    name: dns
   type: Primary
 ```
 

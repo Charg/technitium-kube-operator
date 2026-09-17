@@ -100,6 +100,24 @@ spec:
                 items:
                   type: string
                 type: array
+              serverRef:
+                description: |-
+                  serverRef names the TechnitiumCluster this zone is created on. The
+                  referenced instance must be Ready. Only name is used: a TechnitiumCluster
+                  is cluster-scoped, so the webhook rejects serverRef.namespace if set.
+                properties:
+                  name:
+                    description: name is the Secret's name.
+                    type: string
+                  namespace:
+                    description: |-
+                      namespace is the Secret's namespace. Defaults to the operator's own
+                      namespace when empty, since credential Secrets are typically colocated
+                      with the operator rather than scattered across tenant namespaces.
+                    type: string
+                required:
+                - name
+                type: object
               type:
                 default: Primary
                 description: type is the category of zone to create on the Technitium
@@ -124,6 +142,7 @@ spec:
                 - message: zoneName is immutable
                   rule: self == oldSelf
             required:
+            - serverRef
             - zoneName
             type: object
           status:
