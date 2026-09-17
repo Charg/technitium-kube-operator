@@ -9,7 +9,9 @@ package technitium
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/url"
 	"testing"
 )
 
@@ -109,5 +111,116 @@ func TestGetClusterStatePropagatesError(t *testing.T) {
 
 	if _, err := c.GetClusterState(context.Background()); err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestInitCluster(t *testing.T) {
+	var gotParams url.Values
+	body := `{"response":{"version":"13.4.0","dnsServerDomain":"dns-0.cluster.internal",` +
+		`"clusterInitialized":true,"clusterDomain":"cluster.internal","clusterNodes":[` +
+		`{"id":1,"name":"dns-0.cluster.internal","url":"https://dns-0.cluster.internal:53443",` +
+		`"ipAddresses":["10.0.0.1"],"type":"Primary","state":"Self"}]},"status":"ok"}`
+
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(body))
+	})
+
+	state, err := c.InitCluster(context.Background(), InitClusterOptions{
+		ClusterDomain:          "cluster.internal",
+		PrimaryNodeIPAddresses: []string{"10.0.0.1"},
+	})
+	if err != nil {
+		t.Fatalf("InitCluster: %v", err)
+	}
+
+	if got := gotParams.Get("clusterDomain"); got != "cluster.internal" {
+		t.Errorf("clusterDomain param = %q, want cluster.internal", got)
+	}
+	if got := gotParams.Get("primaryNodeIpAddresses"); got != "10.0.0.1" {
+		t.Errorf("primaryNodeIpAddresses param = %q, want 10.0.0.1", got)
+	}
+	if !state.ClusterInitialized {
+		t.Error("ClusterInitialized = false, want true")
+	}
+	if state.ClusterDomain != "cluster.internal" {
+		t.Errorf("ClusterDomain = %q, want cluster.internal", state.ClusterDomain)
+	}
+	if len(state.Nodes) != 1 {
+		t.Fatalf("len(Nodes) = %d, want 1", len(state.Nodes))
+	}
+}
+
+func TestInitClusterAlreadyInitialized(t *testing.T) {
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"error","errorMessage":"Cluster is already initialized on this node."}`))
+	})
+
+	_, err := c.InitCluster(context.Background(), InitClusterOptions{
+		ClusterDomain:          "cluster.internal",
+		PrimaryNodeIPAddresses: []string{"10.0.0.1"},
+	})
+	if !errors.Is(err, ErrClusterAlreadyInitialized) {
+		t.Fatalf("err = %v, want errors.Is ErrClusterAlreadyInitialized", err)
+	}
+}
+
+func TestInitJoinCluster(t *testing.T) {
+	var gotParams url.Values
+	body := `{"response":{"version":"13.4.0","dnsServerDomain":"dns-1.cluster.internal",` +
+		`"clusterInitialized":true,"clusterDomain":"cluster.internal","clusterNodes":[` +
+		`{"id":2,"name":"dns-1.cluster.internal","url":"https://dns-1.cluster.internal:53443",` +
+		`"ipAddresses":["10.0.0.2"],"type":"Secondary","state":"Self"}]},"status":"ok"}`
+
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(body))
+	})
+
+	state, err := c.InitJoinCluster(context.Background(), InitJoinOptions{
+		SecondaryNodeIPAddresses: []string{"10.0.0.2"},
+		PrimaryNodeURL:           "https://dns-0.cluster.internal:53443/",
+		PrimaryNodeUsername:      "admin",
+		PrimaryNodePassword:      "s3cret",
+		PrimaryNodeIPAddress:     "10.0.0.1",
+		IgnoreCertificateErrors:  true,
+	})
+	if err != nil {
+		t.Fatalf("InitJoinCluster: %v", err)
+	}
+
+	wantParams := map[string]string{
+		"secondaryNodeIpAddresses": "10.0.0.2",
+		"primaryNodeUrl":           "https://dns-0.cluster.internal:53443/",
+		"primaryNodeUsername":      "admin",
+		"primaryNodePassword":      "s3cret",
+		"primaryNodeIpAddress":     "10.0.0.1",
+		"ignoreCertificateErrors":  "true",
+	}
+	for key, want := range wantParams {
+		if got := gotParams.Get(key); got != want {
+			t.Errorf("%s param = %q, want %q", key, got, want)
+		}
+	}
+	if !state.ClusterInitialized {
+		t.Error("ClusterInitialized = false, want true")
+	}
+}
+
+func TestInitJoinClusterAlreadyInitialized(t *testing.T) {
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"error","errorMessage":"This node is already initialized as a Secondary."}`))
+	})
+
+	_, err := c.InitJoinCluster(context.Background(), InitJoinOptions{
+		SecondaryNodeIPAddresses: []string{"10.0.0.2"},
+		PrimaryNodeURL:           "https://dns-0.cluster.internal:53443/",
+		PrimaryNodeUsername:      "admin",
+		PrimaryNodePassword:      "s3cret",
+		PrimaryNodeIPAddress:     "10.0.0.1",
+		IgnoreCertificateErrors:  true,
+	})
+	if !errors.Is(err, ErrClusterAlreadyInitialized) {
+		t.Fatalf("err = %v, want errors.Is ErrClusterAlreadyInitialized", err)
 	}
 }

@@ -110,3 +110,50 @@ func TestClientOptionsFromSecret(t *testing.T) {
 		}
 	})
 }
+
+func TestUsernamePasswordFromSecret(t *testing.T) {
+	t.Run("username and password", func(t *testing.T) {
+		username, password, err := UsernamePasswordFromSecret(secretWith(map[string]string{
+			secretKeyUsername: testUsername, secretKeyPassword: testPassword,
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if username != testUsername || password != testPassword {
+			t.Errorf("got (%q, %q), want (%q, %q)", username, password, testUsername, testPassword)
+		}
+	})
+
+	t.Run("username trimmed, password untouched", func(t *testing.T) {
+		username, password, err := UsernamePasswordFromSecret(secretWith(map[string]string{
+			secretKeyUsername: "  admin\n", secretKeyPassword: "s3cret\n",
+		}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if username != testUsername {
+			t.Errorf("username = %q, want trimmed %q", username, testUsername)
+		}
+		if password != "s3cret\n" {
+			t.Errorf("password = %q, want untrimmed %q", password, "s3cret\n")
+		}
+	})
+
+	t.Run("missing username", func(t *testing.T) {
+		if _, _, err := UsernamePasswordFromSecret(secretWith(map[string]string{secretKeyPassword: testPassword})); err == nil {
+			t.Fatal("expected error for missing username")
+		}
+	})
+
+	t.Run("missing password", func(t *testing.T) {
+		if _, _, err := UsernamePasswordFromSecret(secretWith(map[string]string{secretKeyUsername: testUsername})); err == nil {
+			t.Fatal("expected error for missing password")
+		}
+	})
+
+	t.Run("nil secret", func(t *testing.T) {
+		if _, _, err := UsernamePasswordFromSecret(nil); err == nil {
+			t.Fatal("expected error for nil secret")
+		}
+	})
+}

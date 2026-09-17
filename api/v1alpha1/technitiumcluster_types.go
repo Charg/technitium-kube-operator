@@ -42,6 +42,11 @@ const (
 	// TechnitiumClusterPhaseBootstrapping means the workload is running but the
 	// Technitium instance has not yet reported itself ready over its API.
 	TechnitiumClusterPhaseBootstrapping TechnitiumClusterPhase = "Bootstrapping"
+	// TechnitiumClusterPhaseClustering means the workload is bootstrapped and
+	// spec.replicas is greater than 1, but init/join across the nodes has not
+	// yet converged: the primary has not initialized, or a secondary has not
+	// yet joined.
+	TechnitiumClusterPhaseClustering TechnitiumClusterPhase = "Clustering"
 	// TechnitiumClusterPhaseReady means the instance is reachable and serving.
 	TechnitiumClusterPhaseReady TechnitiumClusterPhase = "Ready"
 )
@@ -128,6 +133,18 @@ type TechnitiumClusterSpec struct {
 	// records.
 	// +optional
 	DNSServerDomain string `json:"dnsServerDomain,omitempty"`
+
+	// clusterDomain names the internal domain used to build each node's
+	// cluster node name ("<pod>.<clusterDomain>") and the primary node URL
+	// passed to secondaries on join. It does not need to be resolvable DNS
+	// and node certificates need no matching SAN for it: the operator joins
+	// secondaries by primary IP address with certificate verification
+	// disabled, since Technitium's inter-node TLS is not meant to authenticate
+	// against real DNS in this deployment model. When unset it defaults to
+	// spec.dnsServerDomain, or "<name>.local" if that is also unset. Only
+	// meaningful when spec.replicas is greater than 1.
+	// +optional
+	ClusterDomain string `json:"clusterDomain,omitempty"`
 }
 
 // TechnitiumClusterNodeStatus reports one StatefulSet ordinal's observed

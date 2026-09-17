@@ -85,6 +85,18 @@ spec:
                 required:
                 - name
                 type: object
+              clusterDomain:
+                description: |-
+                  clusterDomain names the internal domain used to build each node's
+                  cluster node name ("<pod>.<clusterDomain>") and the primary node URL
+                  passed to secondaries on join. It does not need to be resolvable DNS
+                  and node certificates need no matching SAN for it: the operator joins
+                  secondaries by primary IP address with certificate verification
+                  disabled, since Technitium's inter-node TLS is not meant to authenticate
+                  against real DNS in this deployment model. When unset it defaults to
+                  spec.dnsServerDomain, or "<name>.local" if that is also unset. Only
+                  meaningful when spec.replicas is greater than 1.
+                type: string
               dnsServerDomain:
                 description: |-
                   dnsServerDomain sets the Technitium DNS_SERVER_DOMAIN environment

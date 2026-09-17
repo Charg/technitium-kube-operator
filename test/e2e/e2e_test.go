@@ -372,6 +372,41 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "TechnitiumCluster deletion did not complete")
 		})
+
+		It("clusters a multi-replica TechnitiumCluster and reconciles a Zone against it", func() {
+			By("provisioning a 2-replica TechnitiumCluster and waiting for real cluster init/join to converge")
+			deployClusteredTechnitiumCluster(clusteredClusterName, 2)
+
+			By("applying a Zone targeting the clustered instance")
+			applyZone("e2e-clustered-zone", "e2e-clustered.example.com", clusteredClusterName)
+
+			By("waiting for the Zone to report Ready")
+			verifyZoneReady := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "zone", "e2e-clustered-zone",
+					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"), "Zone not Ready yet")
+			}
+			Eventually(verifyZoneReady, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+			By("deleting the Zone and waiting for the finalizer to clear it")
+			cmd := exec.Command("kubectl", "delete", "zone", "e2e-clustered-zone", "--wait=true", "--timeout=90s")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
+
+			verifyZoneGone := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "zone", "e2e-clustered-zone")
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Zone should no longer exist")
+			}
+			Eventually(verifyZoneGone, time.Minute, 2*time.Second).Should(Succeed())
+
+			By("deleting the clustered TechnitiumCluster")
+			cmd = exec.Command("kubectl", "delete", "technitiumcluster", clusteredClusterName, "--wait=true", "--timeout=90s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "TechnitiumCluster deletion did not complete")
+		})
 	})
 })
 

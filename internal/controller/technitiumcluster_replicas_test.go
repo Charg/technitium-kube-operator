@@ -125,7 +125,7 @@ var _ = Describe("TechnitiumCluster Controller multi-replica provisioning", func
 			Expect(sts.Spec.VolumeClaimTemplates[0].Name).To(Equal("data"))
 		})
 
-		It("stays Provisioning when only some replicas are ready, and advances once all are ready", func() {
+		It("stays Provisioning when only some replicas are ready, and advances to Clustering once all are ready", func() {
 			createClusterCR(3)
 			r := newReconciler()
 			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
@@ -144,8 +144,14 @@ var _ = Describe("TechnitiumCluster Controller multi-replica provisioning", func
 			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
 
+			// This test never creates Pod objects (envtest runs no
+			// StatefulSet controller), so reconcileClustering can never
+			// resolve a primary IP and clustering never converges here: it
+			// stays Clustering rather than reaching Ready. Coverage of the
+			// full init/join path through to Ready lives in
+			// technitiumcluster_clustering_test.go, which does create Pods.
 			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
-			Expect(cr.Status.Phase).To(Equal(dnsv1alpha1.TechnitiumClusterPhaseReady))
+			Expect(cr.Status.Phase).To(Equal(dnsv1alpha1.TechnitiumClusterPhaseClustering))
 			Expect(cr.Status.ReadyReplicas).To(Equal(int32(3)))
 		})
 

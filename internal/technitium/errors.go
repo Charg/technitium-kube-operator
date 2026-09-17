@@ -20,6 +20,11 @@ var (
 	ErrZoneAlreadyExists = errors.New("technitium: zone already exists")
 	ErrZoneNotFound      = errors.New("technitium: zone not found")
 	ErrInvalidToken      = errors.New("technitium: invalid or expired token")
+	// ErrClusterAlreadyInitialized means the node init/initJoin was called
+	// against already has a cluster (as Primary or Secondary). Re-running
+	// either call on such a node is the expected steady state once clustering
+	// has converged, so callers treat it as success.
+	ErrClusterAlreadyInitialized = errors.New("technitium: cluster already initialized")
 )
 
 // APIError carries a Technitium error response that does not map to a sentinel.
@@ -58,6 +63,8 @@ func classifyStatus(status, message string) error {
 
 	lower := strings.ToLower(message)
 	switch {
+	case strings.Contains(lower, "already initialized"):
+		return fmt.Errorf("%w: %s", ErrClusterAlreadyInitialized, message)
 	case strings.Contains(lower, "already exists"):
 		return fmt.Errorf("%w: %s", ErrZoneAlreadyExists, message)
 	case strings.Contains(lower, "no such zone"),

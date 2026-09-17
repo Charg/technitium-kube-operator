@@ -24,15 +24,54 @@ import (
 )
 
 // fakeNodeClient is a nodeAPI stand-in that reports a canned cluster state
-// without making an HTTP call. Real wire-level coverage of GetClusterState
-// lives in internal/technitium.
+// without making an HTTP call. Real wire-level coverage of GetClusterState,
+// InitCluster, and InitJoinCluster lives in internal/technitium.
+//
+// initCalls and initJoinCalls are pointers, mirroring fakeBootstrapClient's
+// "calls" field, since NewNodeClient constructs a fresh fakeNodeClient per
+// endpoint dialed: a plain int field would never accumulate across the
+// several ordinals a clustering reconcile touches, only a shared counter
+// closed over by the test does.
 type fakeNodeClient struct {
 	state *technitium.ClusterState
 	err   error
+
+	initCalls *int
+	initErr   error
+	initState *technitium.ClusterState
+	joinCalls *int
+	joinErr   error
+	joinState *technitium.ClusterState
 }
 
 func (f *fakeNodeClient) GetClusterState(ctx context.Context) (*technitium.ClusterState, error) {
 	return f.state, f.err
+}
+
+func (f *fakeNodeClient) InitCluster(ctx context.Context, opts technitium.InitClusterOptions) (*technitium.ClusterState, error) {
+	if f.initCalls != nil {
+		*f.initCalls++
+	}
+	if f.initErr != nil {
+		return nil, f.initErr
+	}
+	if f.initState != nil {
+		return f.initState, nil
+	}
+	return f.state, nil
+}
+
+func (f *fakeNodeClient) InitJoinCluster(ctx context.Context, opts technitium.InitJoinOptions) (*technitium.ClusterState, error) {
+	if f.joinCalls != nil {
+		*f.joinCalls++
+	}
+	if f.joinErr != nil {
+		return nil, f.joinErr
+	}
+	if f.joinState != nil {
+		return f.joinState, nil
+	}
+	return f.state, nil
 }
 
 var _ = Describe("TechnitiumCluster Controller node status", func() {
