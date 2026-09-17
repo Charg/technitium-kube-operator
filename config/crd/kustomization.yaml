@@ -5,6 +5,7 @@ resources:
 - bases/dns.packet.fail_zones.yaml
 - bases/dns.packet.fail_technitiumclusters.yaml
 - bases/dns.packet.fail_records.yaml
+- bases/dns.packet.fail_serversettings.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
