@@ -126,10 +126,10 @@ func TestAddRecordRequiresDomainAndType(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	if err := c.AddRecord(context.Background(), AddRecordOptions{Type: "A", RecordValue: RecordValue{IPAddress: "1.1.1.1"}}); err == nil {
+	if err := c.AddRecord(context.Background(), AddRecordOptions{Type: "A", IPAddress: "1.1.1.1"}); err == nil {
 		t.Fatal("expected error for empty domain")
 	}
-	if err := c.AddRecord(context.Background(), AddRecordOptions{Domain: testDomain, RecordValue: RecordValue{IPAddress: "1.1.1.1"}}); err == nil {
+	if err := c.AddRecord(context.Background(), AddRecordOptions{Domain: testDomain, IPAddress: "1.1.1.1"}); err == nil {
 		t.Fatal("expected error for empty type")
 	}
 }

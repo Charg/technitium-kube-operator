@@ -198,11 +198,9 @@ var _ = Describe("TechnitiumCluster Controller clustering", func() {
 		// resolveClusterPods requires to treat the ordinal as reachable.
 		createPod := func(ordinal int32, ip string) {
 			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      fmt.Sprintf("%s-%d", resourceName, ordinal),
-					Namespace: namespace,
-					Labels:    instanceLabels(resourceName),
-				},
+				Name:      fmt.Sprintf("%s-%d", resourceName, ordinal),
+				Namespace: namespace,
+				Labels:    instanceLabels(resourceName),
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
 						{Name: "dns-server", Image: "technitium/dns-server:15.4.0"},
