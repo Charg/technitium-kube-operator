@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -66,12 +67,15 @@ type bootstrapAPI interface {
 	CreateToken(ctx context.Context, tokenName string) (string, error)
 }
 
-// nodeAPI is the slice of the Technitium client the per-node status read
-// needs. It exists so tests can substitute a fake client without spinning up
-// a real Technitium server, and so the controller does not depend on
-// technitium.Client directly for a call this narrow.
+// nodeAPI is the slice of the Technitium client the per-node status read and
+// cluster init/join orchestration need. It exists so tests can substitute a
+// fake client without spinning up a real Technitium server, and so the
+// controller does not depend on technitium.Client directly for calls this
+// narrow.
 type nodeAPI interface {
 	GetClusterState(ctx context.Context) (*technitium.ClusterState, error)
+	InitCluster(ctx context.Context, opts technitium.InitClusterOptions) (*technitium.ClusterState, error)
+	InitJoinCluster(ctx context.Context, opts technitium.InitJoinOptions) (*technitium.ClusterState, error)
 }
 
 // loginNodeClient wraps a *technitium.Client built with WithCredentials so
@@ -89,12 +93,40 @@ type loginNodeClient struct {
 // error from this method as "node not readable yet", the same handling a
 // GetClusterState transport error already gets.
 func (n *loginNodeClient) GetClusterState(ctx context.Context) (*technitium.ClusterState, error) {
-	if n.Client.Token() == "" {
-		if _, err := n.Client.Login(ctx); err != nil {
-			return nil, fmt.Errorf("logging in to node: %w", err)
-		}
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return nil, err
 	}
 	return n.Client.GetClusterState(ctx)
+}
+
+// InitCluster logs in on first use, then delegates. See GetClusterState for
+// why the login happens here rather than at construction.
+func (n *loginNodeClient) InitCluster(ctx context.Context, opts technitium.InitClusterOptions) (*technitium.ClusterState, error) {
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return nil, err
+	}
+	return n.Client.InitCluster(ctx, opts)
+}
+
+// InitJoinCluster logs in on first use, then delegates. See GetClusterState
+// for why the login happens here rather than at construction.
+func (n *loginNodeClient) InitJoinCluster(ctx context.Context, opts technitium.InitJoinOptions) (*technitium.ClusterState, error) {
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return nil, err
+	}
+	return n.Client.InitJoinCluster(ctx, opts)
+}
+
+// ensureLoggedIn mints a session token on first use of this wrapper. It is
+// shared by every method above rather than duplicated inline.
+func (n *loginNodeClient) ensureLoggedIn(ctx context.Context) error {
+	if n.Client.Token() != "" {
+		return nil
+	}
+	if _, err := n.Client.Login(ctx); err != nil {
+		return fmt.Errorf("logging in to node: %w", err)
+	}
+	return nil
 }
 
 // TechnitiumClusterReconciler provisions and drift-corrects the workload
@@ -203,6 +235,10 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// endpoint with no listener behind it yet is a wasted round trip that
 	// updateStatus's short requeue will simply retry next poll anyway.
 	bootstrapped := false
+	// A single replica is a standalone instance by definition: there is
+	// nothing to init/join, so it is "clustered" without ever running
+	// reconcileClustering.
+	clustered := desiredReplicas <= 1
 	if readyReplicas >= desiredReplicas {
 		bootstrapped, err = r.ensureToken(ctx, &tc, endpoint)
 		if err != nil {
@@ -212,9 +248,23 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 			}
 			return ctrl.Result{}, err
 		}
+
+		// Clustering only once bootstrap has minted a working admin token:
+		// init/join calls use the same credentials, so attempting them first
+		// would just fail the same way ensureToken already handles.
+		if bootstrapped && desiredReplicas > 1 {
+			clustered, err = r.reconcileClustering(ctx, &tc, desiredReplicas)
+			if err != nil {
+				log.Error(err, "Failed to reconcile TechnitiumCluster clustering", "cluster", tc.Name)
+				if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
+					log.Error(statusErr, "Failed to update TechnitiumCluster status", "cluster", tc.Name)
+				}
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
-	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts, endpoint, bootstrapped)
+	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts, endpoint, bootstrapped, clustered)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -322,6 +372,185 @@ func (r *TechnitiumClusterReconciler) adminCredentials(ctx context.Context, tc *
 		return "", "", fmt.Errorf("admin secret %s has no %q key", secretKey, adminSecretPasswordKey)
 	}
 	return string(u), string(p), nil
+}
+
+// clusterDomainFor names the domain used to build each node's Technitium
+// cluster node name ("<pod>.<clusterDomain>") and the primary node URL
+// passed to secondaries on join. It falls back to spec.dnsServerDomain
+// before defaulting, since a caller who already set that field most likely
+// wants it to double as the cluster's identity too; a bare "<name>.local" is
+// only ever used to satisfy the API, since these names carry no real DNS
+// resolution requirement (see spec.clusterDomain's doc comment).
+func clusterDomainFor(tc *dnsv1alpha1.TechnitiumCluster) string {
+	if tc.Spec.ClusterDomain != "" {
+		return tc.Spec.ClusterDomain
+	}
+	if tc.Spec.DNSServerDomain != "" {
+		return tc.Spec.DNSServerDomain
+	}
+	return tc.Name + ".local"
+}
+
+// clusterPodInfo is one StatefulSet ordinal's observed Pod address and
+// readiness, read directly off the Pod rather than the StatefulSet's
+// aggregate ReadyReplicas count: cluster init/join needs a specific
+// ordinal's own IP, which the StatefulSet itself does not expose.
+type clusterPodInfo struct {
+	ip    string
+	ready bool
+}
+
+// resolveClusterPods reads every desired ordinal's Pod IP and readiness.
+// envtest runs no kubelet, so in tests these fields only ever get populated
+// because the test itself creates the Pod objects and status; production
+// pods come from the owned StatefulSet the same way. An ordinal with no Pod
+// yet, no assigned IP, or no Ready condition True is simply absent from the
+// returned map, which callers treat identically to "not ready".
+func (r *TechnitiumClusterReconciler) resolveClusterPods(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, desiredReplicas int32) (map[int32]clusterPodInfo, error) {
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList, client.InNamespace(r.OperatorNamespace), client.MatchingLabels(instanceLabels(tc.Name))); err != nil {
+		return nil, fmt.Errorf("listing pods for %s: %w", tc.Name, err)
+	}
+
+	byName := make(map[string]*corev1.Pod, len(podList.Items))
+	for i := range podList.Items {
+		byName[podList.Items[i].Name] = &podList.Items[i]
+	}
+
+	pods := make(map[int32]clusterPodInfo, desiredReplicas)
+	for i := int32(0); i < desiredReplicas; i++ {
+		pod, ok := byName[fmt.Sprintf("%s-%d", tc.Name, i)]
+		if !ok {
+			continue
+		}
+		ready := false
+		for _, cond := range pod.Status.Conditions {
+			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+				ready = true
+				break
+			}
+		}
+		pods[i] = clusterPodInfo{ip: pod.Status.PodIP, ready: ready && pod.Status.PodIP != ""}
+	}
+	return pods, nil
+}
+
+// reconcileClustering drives Technitium's own cluster init/join across the
+// provisioned pods. Reconcile only calls it once the workload is bootstrapped
+// and spec.replicas is greater than 1; a single replica has nothing to
+// cluster and is never routed here.
+//
+// It returns clustered=true only once the primary has an initialized cluster
+// and every secondary has joined it. Any other outcome that is expected to
+// resolve on its own, an unready pod, a node whose API has not caught up
+// yet, is reported as (false, nil) so Reconcile requeues normally instead of
+// flapping the resource to Degraded on a startup race that the next poll
+// will simply find resolved. Secondaries are only attempted once the primary
+// section below has confirmed (or made) it initialized, which is what avoids
+// racing Technitium's own ordering constraint ("the Primary node does not
+// have a Cluster initialized"). Only a genuine failure from the init/join
+// calls themselves is returned as an error, since that is not something a
+// requeue alone will fix.
+func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, desiredReplicas int32) (bool, error) {
+	log := logf.FromContext(ctx)
+
+	username, password, err := r.adminCredentials(ctx, tc)
+	if err != nil {
+		return false, err
+	}
+
+	pods, err := r.resolveClusterPods(ctx, tc, desiredReplicas)
+	if err != nil {
+		return false, err
+	}
+
+	primaryPod, ok := pods[0]
+	if !ok || !primaryPod.ready {
+		log.Info("Deferring cluster init: primary pod not yet ready", "cluster", tc.Name)
+		return false, nil
+	}
+
+	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, 0, r.OperatorNamespace), username, password)
+	if err != nil {
+		return false, fmt.Errorf("building node client for primary of %s: %w", tc.Name, err)
+	}
+
+	primaryState, err := primaryClient.GetClusterState(ctx)
+	if err != nil {
+		// A pod reporting Ready is not a guarantee its API is already
+		// serving correctly; buildNodeStatuses treats the identical
+		// condition as "not yet reachable" rather than a failure, and
+		// clustering follows the same lenient handling.
+		log.Info("Deferring cluster init: primary cluster state not yet reachable",
+			"cluster", tc.Name, "error", err.Error())
+		return false, nil
+	}
+
+	if !primaryState.ClusterInitialized {
+		_, err := primaryClient.InitCluster(ctx, technitium.InitClusterOptions{
+			ClusterDomain:          clusterDomainFor(tc),
+			PrimaryNodeIPAddresses: []string{primaryPod.ip},
+		})
+		if err != nil && !errors.Is(err, technitium.ErrClusterAlreadyInitialized) {
+			return false, fmt.Errorf("initializing cluster on primary of %s: %w", tc.Name, err)
+		}
+		log.Info("Initialized Technitium cluster on primary", "cluster", tc.Name)
+	}
+
+	// primaryNodeUrl must be the primary's domain name, not an IP: Technitium
+	// stores it as the node's address in the cluster config. The actual join
+	// dial target is primaryNodeIpAddress below, which is why the domain
+	// here can be unresolvable.
+	primaryURL := fmt.Sprintf("https://%s-0.%s:53443/", tc.Name, clusterDomainFor(tc))
+
+	allJoined := true
+	for i := int32(1); i < desiredReplicas; i++ {
+		pod, ok := pods[i]
+		if !ok || !pod.ready {
+			log.Info("Deferring cluster join: secondary pod not yet ready", "cluster", tc.Name, "ordinal", i)
+			allJoined = false
+			continue
+		}
+
+		secondaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, i, r.OperatorNamespace), username, password)
+		if err != nil {
+			return false, fmt.Errorf("building node client for ordinal %d of %s: %w", i, tc.Name, err)
+		}
+
+		secondaryState, err := secondaryClient.GetClusterState(ctx)
+		if err != nil {
+			log.Info("Deferring cluster join: secondary cluster state not yet reachable",
+				"cluster", tc.Name, "ordinal", i, "error", err.Error())
+			allJoined = false
+			continue
+		}
+		if secondaryState.ClusterInitialized {
+			continue
+		}
+
+		_, err = secondaryClient.InitJoinCluster(ctx, technitium.InitJoinOptions{
+			SecondaryNodeIPAddresses: []string{pod.ip},
+			PrimaryNodeURL:           primaryURL,
+			PrimaryNodeUsername:      username,
+			PrimaryNodePassword:      password,
+			PrimaryNodeIPAddress:     primaryPod.ip,
+			// The primary's certificate has no SAN matching its unresolvable
+			// cluster domain name, and these nodes carry no real DNS in the
+			// first place; primaryNodeIpAddress above is what is actually
+			// dialed.
+			IgnoreCertificateErrors: true,
+		})
+		switch {
+		case err == nil:
+			log.Info("Joined Technitium cluster as secondary", "cluster", tc.Name, "ordinal", i)
+		case errors.Is(err, technitium.ErrClusterAlreadyInitialized):
+			// Already joined; nothing to do.
+		default:
+			return false, fmt.Errorf("joining cluster as secondary ordinal %d of %s: %w", i, tc.Name, err)
+		}
+	}
+
+	return allJoined, nil
 }
 
 // reconcileWorkload brings the headless Service, client Service, admin
@@ -638,7 +867,7 @@ func volumeClaimTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.Persistent
 // up or still awaiting bootstrap, long once the instance is fully Ready,
 // since readiness and bootstrap progress are only worth polling for quickly
 // in the former cases.
-func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet, endpoint string, bootstrapped bool) (time.Duration, error) {
+func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet, endpoint string, bootstrapped, clustered bool) (time.Duration, error) {
 	var tc dnsv1alpha1.TechnitiumCluster
 	if err := r.Get(ctx, key, &tc); err != nil {
 		return 0, client.IgnoreNotFound(err)
@@ -704,6 +933,16 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		// Short requeue: bootstrap converges as soon as the server picks up
 		// the generated admin password, which is typically seconds away
 		// once the pod itself is ready, not the drift-correction cadence.
+		requeueAfter = clusterPollInterval
+	case desiredReplicas > 1 && !clustered:
+		phase = dnsv1alpha1.TechnitiumClusterPhaseClustering
+		reason = "AwaitingClusterJoin"
+		message = "Admin API token is bootstrapped; waiting for cluster init/join to converge across nodes"
+		availableStatus = metav1.ConditionFalse
+		progressingStatus = metav1.ConditionTrue
+		// Short requeue: like Bootstrapping, this converges within a poll or
+		// two once every pod's own API has caught up, not on the drift
+		// cadence.
 		requeueAfter = clusterPollInterval
 	default:
 		phase = dnsv1alpha1.TechnitiumClusterPhaseReady
@@ -806,6 +1045,18 @@ func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc 
 		return nodes, fmt.Sprintf("0/%d", desiredReplicas)
 	}
 
+	// Once the primary reports a cluster, its own clusterNodes list is the
+	// authoritative view of every member that has actually joined, including
+	// a secondary this pass has not yet reached with its own per-node read.
+	// A single-replica instance never runs init, so this path never applies
+	// to it: its one node stays on the readiness-derived loop below for its
+	// whole lifetime.
+	if desiredReplicas > 1 {
+		if nodes, members, ok := r.buildNodeStatusesFromPrimary(ctx, tc, username, password, desiredReplicas); ok {
+			return nodes, members
+		}
+	}
+
 	nodes := make([]dnsv1alpha1.TechnitiumClusterNodeStatus, desiredReplicas)
 	joined := 0
 	for i := int32(0); i < desiredReplicas; i++ {
@@ -857,6 +1108,58 @@ func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc 
 	}
 
 	return nodes, fmt.Sprintf("%d/%d", joined, desiredReplicas)
+}
+
+// buildNodeStatusesFromPrimary reads the primary's own /state and, once it
+// reports the cluster initialized, renders every ordinal's status from its
+// clusterNodes list rather than each node's own report. It reports ok=false
+// when the primary is unreachable or has not initialized yet, so the caller
+// falls back to buildNodeStatuses's pre-cluster, per-node reads for that
+// window.
+func (r *TechnitiumClusterReconciler) buildNodeStatusesFromPrimary(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, username, password string, desiredReplicas int32) ([]dnsv1alpha1.TechnitiumClusterNodeStatus, string, bool) {
+	log := logf.FromContext(ctx)
+
+	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, 0, r.OperatorNamespace), username, password)
+	if err != nil {
+		return nil, "", false
+	}
+
+	primaryState, err := primaryClient.GetClusterState(ctx)
+	if err != nil {
+		log.Info("Primary cluster state not yet readable for node status", "cluster", tc.Name, "error", err.Error())
+		return nil, "", false
+	}
+	if !primaryState.ClusterInitialized {
+		return nil, "", false
+	}
+
+	nodes := make([]dnsv1alpha1.TechnitiumClusterNodeStatus, desiredReplicas)
+	joined := 0
+	for i := int32(0); i < desiredReplicas; i++ {
+		podName := fmt.Sprintf("%s-%d", tc.Name, i)
+		status := dnsv1alpha1.TechnitiumClusterNodeStatus{
+			Name:    podName,
+			Role:    roleForOrdinal(i),
+			State:   nodeNotReadyState,
+			Message: "not yet joined the cluster",
+		}
+
+		if member := findClusterMember(primaryState.Nodes, podName); member != nil {
+			status.Role = member.Type
+			status.State = member.State
+			status.Message = ""
+			if member.ConfigLastSynced != nil {
+				status.LastSynced = &metav1.Time{Time: *member.ConfigLastSynced}
+			}
+		}
+
+		if nodeJoined(status.State) {
+			joined++
+		}
+		nodes[i] = status
+	}
+
+	return nodes, fmt.Sprintf("%d/%d", joined, desiredReplicas), true
 }
 
 // markDegraded re-fetches the TechnitiumCluster and records a failed

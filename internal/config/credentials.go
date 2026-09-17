@@ -48,3 +48,28 @@ func ClientOptionsFromSecret(secret *corev1.Secret) ([]technitium.Option, error)
 			secret.Name, secretKeyToken, secretKeyUsername, secretKeyPassword)
 	}
 }
+
+// UsernamePasswordFromSecret reads the local admin username/password out of a
+// credentials Secret. Unlike ClientOptionsFromSecret, it never accepts a
+// token: cluster init/initJoin authenticate with the plain admin login
+// itself, there being no notion of a per-node API token before a node has
+// even joined a cluster.
+func UsernamePasswordFromSecret(secret *corev1.Secret) (username, password string, err error) {
+	if secret == nil {
+		return "", "", errors.New("technitium: credentials secret is nil")
+	}
+
+	// Trim the username the same way ClientOptionsFromSecret does; the
+	// password is left untrimmed since a trailing character there could be
+	// part of the actual admin password rather than shell/file artifact.
+	username = strings.TrimSpace(string(secret.Data[secretKeyUsername]))
+	password = string(secret.Data[secretKeyPassword])
+
+	if username == "" {
+		return "", "", fmt.Errorf("technitium: credentials secret %q has no %q key", secret.Name, secretKeyUsername)
+	}
+	if password == "" {
+		return "", "", fmt.Errorf("technitium: credentials secret %q has no %q key", secret.Name, secretKeyPassword)
+	}
+	return username, password, nil
+}

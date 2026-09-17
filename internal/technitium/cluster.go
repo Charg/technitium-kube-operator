@@ -9,6 +9,9 @@ package technitium
 
 import (
 	"context"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -50,6 +53,85 @@ type ClusterState struct {
 func (c *Client) GetClusterState(ctx context.Context) (*ClusterState, error) {
 	var state ClusterState
 	if err := c.do(ctx, "/api/admin/cluster/state", nil, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// InitClusterOptions describes a cluster init request, run once against the
+// node that becomes the Primary.
+type InitClusterOptions struct {
+	// ClusterDomain is the domain every node's hostname is joined with to form
+	// its cluster node name ("<hostname>.<clusterDomain>"). It need not be
+	// resolvable DNS: nodes address each other by IP, not by this name.
+	ClusterDomain string
+	// PrimaryNodeIPAddresses are the IP addresses other nodes use to reach this
+	// Primary. In practice this is the pod's own IP.
+	PrimaryNodeIPAddresses []string
+}
+
+// InitCluster initializes a new Technitium cluster on the calling node,
+// making it the Primary. Calling it again on a node already initialized
+// fails with ErrClusterAlreadyInitialized, which callers can treat as
+// success for idempotent reconciliation.
+func (c *Client) InitCluster(ctx context.Context, opts InitClusterOptions) (*ClusterState, error) {
+	params := url.Values{}
+	params.Set("clusterDomain", opts.ClusterDomain)
+	params.Set("primaryNodeIpAddresses", strings.Join(opts.PrimaryNodeIPAddresses, ","))
+
+	var state ClusterState
+	if err := c.do(ctx, "/api/admin/cluster/init", params, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+// InitJoinOptions describes a cluster join request, run against each node
+// that becomes a Secondary. The primary fields identify the already-
+// initialized Primary this node is joining.
+type InitJoinOptions struct {
+	// SecondaryNodeIPAddresses are the IP addresses other nodes use to reach
+	// this Secondary. In practice this is the pod's own IP.
+	SecondaryNodeIPAddresses []string
+	// PrimaryNodeURL is the Primary's own node URL (its domain name, not an
+	// IP), as reported in its cluster state. Technitium stores this URL as
+	// the node's address in the cluster config, so it must be the domain form
+	// even though PrimaryNodeIPAddress below is what is actually dialed.
+	PrimaryNodeURL string
+	// PrimaryNodeUsername and PrimaryNodePassword are the Primary's local
+	// admin credentials, used once to authenticate the join.
+	PrimaryNodeUsername string
+	PrimaryNodePassword string
+	// PrimaryNodeIPAddress is the address actually dialed to reach the
+	// Primary. Passing it lets a join succeed against a PrimaryNodeURL whose
+	// domain has no real DNS, which is the case for every node name the
+	// operator assigns.
+	PrimaryNodeIPAddress string
+	// IgnoreCertificateErrors skips TLS certificate validation on the join
+	// call to the Primary's inter-node port. It is required here because the
+	// Primary's certificate has no SAN matching its unresolvable cluster
+	// domain name.
+	IgnoreCertificateErrors bool
+}
+
+// InitJoinCluster joins the calling node to an already-initialized cluster as
+// a Secondary. Calling it again on a node already joined fails with
+// ErrClusterAlreadyInitialized, which callers can treat as success for
+// idempotent reconciliation. Joining before the Primary itself has run
+// InitCluster fails with a distinct server error ("the Primary node does not
+// have a Cluster initialized"), which callers must order around rather than
+// treat as a sentinel.
+func (c *Client) InitJoinCluster(ctx context.Context, opts InitJoinOptions) (*ClusterState, error) {
+	params := url.Values{}
+	params.Set("secondaryNodeIpAddresses", strings.Join(opts.SecondaryNodeIPAddresses, ","))
+	params.Set("primaryNodeUrl", opts.PrimaryNodeURL)
+	params.Set("primaryNodeUsername", opts.PrimaryNodeUsername)
+	params.Set("primaryNodePassword", opts.PrimaryNodePassword)
+	params.Set("primaryNodeIpAddress", opts.PrimaryNodeIPAddress)
+	params.Set("ignoreCertificateErrors", strconv.FormatBool(opts.IgnoreCertificateErrors))
+
+	var state ClusterState
+	if err := c.do(ctx, "/api/admin/cluster/initJoin", params, &state); err != nil {
 		return nil, err
 	}
 	return &state, nil
