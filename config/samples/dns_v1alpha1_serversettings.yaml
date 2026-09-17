@@ -1,0 +1,23 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: ServerSettings
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: serversettings-sample
+spec:
+  serverRef:
+    name: dns-sample
+  forwarders:
+    addresses:
+      - 1.1.1.1
+      - 8.8.8.8
+    protocol: Tls
+  recursion:
+    policy: AllowOnlyForPrivateNetworks
+  cache:
+    serveStale: true
+    serveStaleTtlSeconds: 259200
+  logging:
+    enabled: true
+    logQueries: false

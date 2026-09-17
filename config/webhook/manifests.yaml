@@ -30,6 +30,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /mutate-dns-packet-fail-v1alpha1-serversettings
+  failurePolicy: Fail
+  name: mserversettings-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - serversettings
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /mutate-dns-packet-fail-v1alpha1-zone
   failurePolicy: Fail
   name: mzone-v1alpha1.kb.io
@@ -69,6 +89,26 @@ webhooks:
     - UPDATE
     resources:
     - records
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-dns-packet-fail-v1alpha1-serversettings
+  failurePolicy: Fail
+  name: vserversettings-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - serversettings
   sideEffects: None
 - admissionReviewVersions:
   - v1
