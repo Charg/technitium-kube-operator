@@ -41,6 +41,7 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
+  - blocklists
   - records
   - serversettings
   - zones
@@ -55,6 +56,7 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
+  - blocklists/finalizers
   - records/finalizers
   - serversettings/finalizers
   - technitiumclusters/finalizers
@@ -64,6 +66,7 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
+  - blocklists/status
   - records/status
   - serversettings/status
   - technitiumclusters/status

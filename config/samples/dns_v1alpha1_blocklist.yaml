@@ -1,0 +1,22 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: Blocklist
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: blocklist-sample
+spec:
+  serverRef:
+    name: dns-sample
+  enabled: true
+  blockListUrls:
+    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+    - https://big.oisd.nl
+  updateIntervalHours: 24
+  blockingType: NxDomain
+  allowedDomains:
+    - safe-telemetry.example.com
+    - vendor-cdn.example.com
+  blockedDomains:
+    - ads.internal.example.com
+  deletionPolicy: Delete
