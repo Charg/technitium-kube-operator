@@ -416,8 +416,7 @@ func deleteOptionsFromSpec(spec dnsv1alpha1.RecordSpec) technitium.DeleteRecordO
 // actually present on the server. Used to correct data drift, where the value
 // to delete is the stale one on the server, not the desired one in the spec.
 func deleteOptionsFromCurrent(spec dnsv1alpha1.RecordSpec, current *technitium.Record) technitium.DeleteRecordOptions {
-	opts := technitium.DeleteRecordOptions{Zone: spec.Zone, Domain: spec.Name, Type: string(spec.Type)}
-	opts.RecordValue = technitium.RecordValue{
+	opts := technitium.DeleteRecordOptions{Zone: spec.Zone, Domain: spec.Name, Type: string(spec.Type),
 		IPAddress:  current.RData.IPAddress,
 		CName:      current.RData.CName,
 		Text:       current.RData.Text,
@@ -427,7 +426,7 @@ func deleteOptionsFromCurrent(spec dnsv1alpha1.RecordSpec, current *technitium.R
 	}
 	if current.RData.Preference != 0 {
 		pref := current.RData.Preference
-		opts.RecordValue.Preference = &pref
+		opts.Preference = &pref
 	}
 	return opts
 }

@@ -159,10 +159,10 @@ func (n *loginNodeClient) DeletePrimaryCluster(ctx context.Context, force bool) 
 // ensureLoggedIn mints a session token on first use of this wrapper. It is
 // shared by every method above rather than duplicated inline.
 func (n *loginNodeClient) ensureLoggedIn(ctx context.Context) error {
-	if n.Client.Token() != "" {
+	if n.Token() != "" {
 		return nil
 	}
-	if _, err := n.Client.Login(ctx); err != nil {
+	if _, err := n.Login(ctx); err != nil {
 		return fmt.Errorf("logging in to node: %w", err)
 	}
 	return nil
@@ -614,7 +614,7 @@ func (r *TechnitiumClusterReconciler) resolveClusterPods(ctx context.Context, tc
 	}
 
 	pods := make(map[int32]clusterPodInfo, desiredReplicas)
-	for i := int32(0); i < desiredReplicas; i++ {
+	for i := range desiredReplicas {
 		pod, ok := byName[fmt.Sprintf("%s-%d", tc.Name, i)]
 		if !ok {
 			continue
@@ -1286,7 +1286,7 @@ func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc 
 
 	nodes := make([]dnsv1alpha1.TechnitiumClusterNodeStatus, desiredReplicas)
 	joined := 0
-	for i := int32(0); i < desiredReplicas; i++ {
+	for i := range desiredReplicas {
 		podName := fmt.Sprintf("%s-%d", tc.Name, i)
 		status := dnsv1alpha1.TechnitiumClusterNodeStatus{
 			Name:  podName,
@@ -1362,7 +1362,7 @@ func (r *TechnitiumClusterReconciler) buildNodeStatusesFromPrimary(ctx context.C
 
 	nodes := make([]dnsv1alpha1.TechnitiumClusterNodeStatus, desiredReplicas)
 	joined := 0
-	for i := int32(0); i < desiredReplicas; i++ {
+	for i := range desiredReplicas {
 		podName := fmt.Sprintf("%s-%d", tc.Name, i)
 		status := dnsv1alpha1.TechnitiumClusterNodeStatus{
 			Name:    podName,
