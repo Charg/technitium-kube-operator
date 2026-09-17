@@ -19,7 +19,9 @@ func TestGetDNSSettings(t *testing.T) {
 		`"recursion":"AllowOnlyForPrivateNetworks","recursionNetworkACL":["192.168.0.0/16"],` +
 		`"forwarders":["1.1.1.1","8.8.8.8"],"forwarderProtocol":"Tls",` +
 		`"serveStale":true,"serveStaleTtl":259200,"cacheMaximumRecordTtl":604800,"cacheMinimumRecordTtl":10,` +
-		`"enableLogging":true,"logQueries":false,"useLocalTime":true,"maxLogFileDays":30}}`
+		`"enableLogging":true,"logQueries":false,"useLocalTime":true,"maxLogFileDays":30,` +
+		`"enableBlocking":true,"blockingType":"NxDomain",` +
+		`"blockListUrls":["https://example.com/hosts"],"blockListUpdateIntervalHours":24}}`
 
 	c := newTestClient(t, "t", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body))
@@ -51,6 +53,12 @@ func TestGetDNSSettings(t *testing.T) {
 	if !settings.EnableLogging || settings.LogQueries || !settings.UseLocalTime || settings.MaxLogFileDays != 30 {
 		t.Errorf("logging fields: %+v", settings)
 	}
+	if !settings.EnableBlocking || settings.BlockingType != "NxDomain" || settings.BlockListUpdateIntervalHours != 24 {
+		t.Errorf("blocking fields: %+v", settings)
+	}
+	if len(settings.BlockListURLs) != 1 || settings.BlockListURLs[0] != "https://example.com/hosts" {
+		t.Errorf("blockListUrls = %v", settings.BlockListURLs)
+	}
 }
 
 func TestSetDNSSettings(t *testing.T) {
@@ -75,7 +83,7 @@ func TestSetDNSSettings(t *testing.T) {
 				"recursion":           {"UseSpecifiedNetworkACL"},
 				"recursionNetworkACL": {"192.168.0.0/16,!10.0.0.0/8"},
 			},
-			absent: []string{"serveStale", "maxLogFileDays"},
+			absent: []string{"serveStale", "enableBlocking", "blockListUrls"},
 		},
 		{
 			name: "empty forwarder slice removes forwarders",
@@ -123,5 +131,40 @@ func TestSetDNSSettings(t *testing.T) {
 				t.Fatalf("SetDNSSettings: %v", err)
 			}
 		})
+	}
+}
+
+func TestSetDNSSettingsBlocking(t *testing.T) {
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		assertQuery(t, r, url.Values{
+			"enableBlocking":               {"true"},
+			"blockingType":                 {"NxDomain"},
+			"blockListUrls":                {"https://a/hosts,https://b/hosts"},
+			"blockListUpdateIntervalHours": {"12"},
+		})
+		_, _ = w.Write([]byte(statusOK))
+	})
+
+	err := c.SetDNSSettings(context.Background(), SetDNSSettingsOptions{
+		EnableBlocking:               ptr(true),
+		BlockingType:                 ptr("NxDomain"),
+		BlockListURLs:                &[]string{"https://a/hosts", "https://b/hosts"},
+		BlockListUpdateIntervalHours: ptr(int32(12)),
+	})
+	if err != nil {
+		t.Fatalf("SetDNSSettings: %v", err)
+	}
+}
+
+func TestForceUpdateBlockLists(t *testing.T) {
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/settings/forceUpdateBlockLists" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(statusOK))
+	})
+
+	if err := c.ForceUpdateBlockLists(context.Background()); err != nil {
+		t.Fatalf("ForceUpdateBlockLists: %v", err)
 	}
 }

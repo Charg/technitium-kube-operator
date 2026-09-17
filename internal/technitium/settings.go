@@ -35,11 +35,19 @@ type DNSSettings struct {
 	LogQueries     bool  `json:"logQueries"`
 	UseLocalTime   bool  `json:"useLocalTime"`
 	MaxLogFileDays int32 `json:"maxLogFileDays"`
+
+	EnableBlocking               bool     `json:"enableBlocking"`
+	BlockingType                 string   `json:"blockingType"`
+	BlockListURLs                []string `json:"blockListUrls"`
+	BlockListUpdateIntervalHours int32    `json:"blockListUpdateIntervalHours"`
 }
 
 // SetDNSSettingsOptions describes a mutation to the server's DNS settings. Every
 // field is a pointer so a nil leaves that setting untouched: /api/settings/set
-// only changes the parameters actually present in the request.
+// only changes the parameters actually present in the request. It carries the
+// fields for every settings-backed CRD (ServerSettings owns forwarding,
+// recursion, cache, and logging; Blocklist owns the blocking fields) so the
+// transport layer maps each setting to its query parameter exactly once.
 type SetDNSSettingsOptions struct {
 	// Forwarders replaces the forwarder list. A non-nil pointer to an empty
 	// slice removes all forwarders (sent as the literal "false" the API expects
@@ -58,6 +66,13 @@ type SetDNSSettingsOptions struct {
 	LogQueries     *bool
 	UseLocalTime   *bool
 	MaxLogFileDays *int32
+
+	// BlockListURLs replaces the block list URL set; a non-nil pointer to an
+	// empty slice clears it (see setList for how removal is wired).
+	EnableBlocking               *bool
+	BlockingType                 *string
+	BlockListURLs                *[]string
+	BlockListUpdateIntervalHours *int32
 }
 
 // GetDNSSettings fetches the server's current DNS settings.
@@ -117,5 +132,17 @@ func (c *Client) SetDNSSettings(ctx context.Context, opts SetDNSSettingsOptions)
 	setBool("useLocalTime", opts.UseLocalTime)
 	setInt("maxLogFileDays", opts.MaxLogFileDays)
 
+	setBool("enableBlocking", opts.EnableBlocking)
+	setStr("blockingType", opts.BlockingType)
+	setList("blockListUrls", opts.BlockListURLs)
+	setInt("blockListUpdateIntervalHours", opts.BlockListUpdateIntervalHours)
+
 	return c.do(ctx, "/api/settings/set", params, nil)
+}
+
+// ForceUpdateBlockLists triggers an immediate download and rebuild of the block
+// list zone from the configured blockListUrls, instead of waiting for the next
+// scheduled update. Technitium syncs this across cluster nodes automatically.
+func (c *Client) ForceUpdateBlockLists(ctx context.Context) error {
+	return c.do(ctx, "/api/settings/forceUpdateBlockLists", nil, nil)
 }
