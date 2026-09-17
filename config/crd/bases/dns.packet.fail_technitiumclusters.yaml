@@ -21,6 +21,9 @@ spec:
     - jsonPath: .status.readyReplicas
       name: Ready
       type: integer
+    - jsonPath: .status.members
+      name: Members
+      type: string
     - jsonPath: .status.endpoint
       name: Endpoint
       type: string
@@ -280,6 +283,59 @@ spec:
                   endpoint is the in-cluster API URL the operator and Zone resources use
                   to reach this instance.
                 type: string
+              members:
+                description: |-
+                  members renders joined/total node counts, for example "1/1". It is a
+                  string rather than two integer fields because a printer column can only
+                  JSONPath into a stored value, not compute one from Nodes.
+                type: string
+              nodes:
+                description: |-
+                  nodes reports each StatefulSet ordinal's observed cluster role and
+                  state, one entry per desired replica.
+                items:
+                  description: |-
+                    TechnitiumClusterNodeStatus reports one StatefulSet ordinal's observed
+                    cluster role. It is populated from the workload's own readiness pre-cluster
+                    (Phase 2 has no init/join yet, so Role and State are inferred rather than
+                    read from a real Technitium clusterNodes entry) and later, once the node
+                    answers /api/admin/cluster/state, corrected from that response.
+                  properties:
+                    lastSynced:
+                      description: |-
+                        lastSynced is when this node last reported its configuration in sync
+                        with the cluster, taken from the node's own configLastSynced. Nil until
+                        the node has been queried successfully at least once.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a short human-readable reason for the current state, set
+                        when a node's cluster state could not be read (for example, the pod is
+                        not yet accepting connections).
+                      type: string
+                    name:
+                      description: |-
+                        name is the StatefulSet pod name this status entry describes, for
+                        example "<cluster>-0".
+                      type: string
+                    role:
+                      description: |-
+                        role is Primary for ordinal 0 and Secondary for every other ordinal.
+                        Ordinal 0 is always the node cluster/init runs against, so its role
+                        never depends on anything the cluster API reports.
+                      type: string
+                    state:
+                      description: |-
+                        state is the node's cluster membership state (for example Self or
+                        Connected once clustering is live) or a readiness-derived placeholder
+                        (for example Ready or NotReady) before the node has ever answered the
+                        cluster state endpoint.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               observedGeneration:
                 description: |-
                   observedGeneration is the .metadata.generation the controller last

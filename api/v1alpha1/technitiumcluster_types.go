@@ -130,6 +130,43 @@ type TechnitiumClusterSpec struct {
 	DNSServerDomain string `json:"dnsServerDomain,omitempty"`
 }
 
+// TechnitiumClusterNodeStatus reports one StatefulSet ordinal's observed
+// cluster role. It is populated from the workload's own readiness pre-cluster
+// (Phase 2 has no init/join yet, so Role and State are inferred rather than
+// read from a real Technitium clusterNodes entry) and later, once the node
+// answers /api/admin/cluster/state, corrected from that response.
+type TechnitiumClusterNodeStatus struct {
+	// name is the StatefulSet pod name this status entry describes, for
+	// example "<cluster>-0".
+	// +required
+	Name string `json:"name"`
+
+	// role is Primary for ordinal 0 and Secondary for every other ordinal.
+	// Ordinal 0 is always the node cluster/init runs against, so its role
+	// never depends on anything the cluster API reports.
+	// +optional
+	Role string `json:"role,omitempty"`
+
+	// state is the node's cluster membership state (for example Self or
+	// Connected once clustering is live) or a readiness-derived placeholder
+	// (for example Ready or NotReady) before the node has ever answered the
+	// cluster state endpoint.
+	// +optional
+	State string `json:"state,omitempty"`
+
+	// lastSynced is when this node last reported its configuration in sync
+	// with the cluster, taken from the node's own configLastSynced. Nil until
+	// the node has been queried successfully at least once.
+	// +optional
+	LastSynced *metav1.Time `json:"lastSynced,omitempty"`
+
+	// message is a short human-readable reason for the current state, set
+	// when a node's cluster state could not be read (for example, the pod is
+	// not yet accepting connections).
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // TechnitiumClusterStatus defines the observed state of TechnitiumCluster.
 type TechnitiumClusterStatus struct {
 	// conditions represent the current state of the TechnitiumCluster resource.
@@ -166,6 +203,17 @@ type TechnitiumClusterStatus struct {
 	// is stale.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// nodes reports each StatefulSet ordinal's observed cluster role and
+	// state, one entry per desired replica.
+	// +optional
+	Nodes []TechnitiumClusterNodeStatus `json:"nodes,omitempty"`
+
+	// members renders joined/total node counts, for example "1/1". It is a
+	// string rather than two integer fields because a printer column can only
+	// JSONPath into a stored value, not compute one from Nodes.
+	// +optional
+	Members string `json:"members,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -173,6 +221,7 @@ type TechnitiumClusterStatus struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Members",type=string,JSONPath=`.status.members`
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=`.status.endpoint`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
