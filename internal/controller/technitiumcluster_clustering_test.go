@@ -97,6 +97,21 @@ func (f *fakeClusterNode) InitJoinCluster(ctx context.Context, opts technitium.I
 	return &technitium.ClusterState{ClusterInitialized: true}, nil
 }
 
+// RemoveSecondary, DeleteSecondary, and DeletePrimaryCluster are not
+// exercised by the clustering tests in this file (teardown has its own test
+// file), but the type must satisfy nodeAPI to stand in for it at all.
+func (f *fakeClusterNode) RemoveSecondary(ctx context.Context, secondaryNodeID int) error {
+	return nil
+}
+
+func (f *fakeClusterNode) DeleteSecondary(ctx context.Context, secondaryNodeID int) error {
+	return nil
+}
+
+func (f *fakeClusterNode) DeletePrimaryCluster(ctx context.Context, force bool) error {
+	return nil
+}
+
 var _ = Describe("TechnitiumCluster Controller clustering", func() {
 	Context("When spec.replicas is 2", func() {
 		ctx := context.Background()

@@ -224,3 +224,73 @@ func TestInitJoinClusterAlreadyInitialized(t *testing.T) {
 		t.Fatalf("err = %v, want errors.Is ErrClusterAlreadyInitialized", err)
 	}
 }
+
+func TestRemoveSecondary(t *testing.T) {
+	var gotParams url.Values
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	if err := c.RemoveSecondary(context.Background(), 2); err != nil {
+		t.Fatalf("RemoveSecondary: %v", err)
+	}
+	if got := gotParams.Get("secondaryNodeId"); got != "2" {
+		t.Errorf("secondaryNodeId param = %q, want 2", got)
+	}
+}
+
+func TestDeleteSecondary(t *testing.T) {
+	var gotParams url.Values
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	if err := c.DeleteSecondary(context.Background(), 2); err != nil {
+		t.Fatalf("DeleteSecondary: %v", err)
+	}
+	if got := gotParams.Get("secondaryNodeId"); got != "2" {
+		t.Errorf("secondaryNodeId param = %q, want 2", got)
+	}
+}
+
+func TestDeleteSecondaryNotFound(t *testing.T) {
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"error","errorMessage":"Secondary node not found."}`))
+	})
+
+	if err := c.DeleteSecondary(context.Background(), 99); !errors.Is(err, ErrZoneNotFound) {
+		t.Fatalf("err = %v, want errors.Is ErrZoneNotFound (classifyStatus maps \"not found\" to it)", err)
+	}
+}
+
+func TestDeletePrimaryCluster(t *testing.T) {
+	var gotParams url.Values
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	if err := c.DeletePrimaryCluster(context.Background(), true); err != nil {
+		t.Fatalf("DeletePrimaryCluster: %v", err)
+	}
+	if got := gotParams.Get("forceDelete"); got != "true" {
+		t.Errorf("forceDelete param = %q, want true", got)
+	}
+}
+
+func TestLeaveCluster(t *testing.T) {
+	var gotParams url.Values
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+
+	if err := c.LeaveCluster(context.Background(), true); err != nil {
+		t.Fatalf("LeaveCluster: %v", err)
+	}
+	if got := gotParams.Get("forceLeave"); got != "true" {
+		t.Errorf("forceLeave param = %q, want true", got)
+	}
+}

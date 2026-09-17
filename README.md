@@ -17,6 +17,32 @@ spec:
     size: 1Gi
 ```
 
+### Deletion and PVC retention
+
+Deleting a `TechnitiumCluster` is guarded by a finalizer, `dns.packet.fail/cluster-cleanup`, so the operator gets a chance to leave Technitium's own cluster state consistent before the StatefulSet, Services, and generated Secret are garbage collected via their owner references.
+
+`spec.deletionPolicy` controls that step:
+
+- `Delete` (default): the controller removes every Secondary from the Primary's cluster membership, then deletes the Primary's own cluster configuration. Every call is best-effort: the workload is being torn down regardless, so a failure (credentials gone, a node already unreachable) is logged and does not block deletion.
+- `Orphan`: the in-Technitium cluster teardown is skipped entirely, leaving whatever cluster state exists. Use this when migrating or adopting the workload rather than decommissioning it.
+
+`spec.storage.retentionPolicy` controls the fate of the data PVCs. StatefulSet `volumeClaimTemplate` PVCs are not garbage collected along with the StatefulSet itself, so this is an explicit decision rather than something owner references handle for you:
+
+- `Retain` (default): the PVCs are left in place. Silently deleting a volume holding zone data and DNSSEC keys is a worse failure mode than an administrator later noticing an orphaned PVC and removing it by hand.
+- `Delete`: the PVCs are removed as part of the same finalizer pass, for a full, intentional teardown with no storage left behind.
+
+```yaml
+apiVersion: dns.packet.fail/v1alpha1
+kind: TechnitiumCluster
+metadata:
+  name: dns
+spec:
+  deletionPolicy: Delete
+  storage:
+    size: 1Gi
+    retentionPolicy: Retain
+```
+
 ## Zone resource
 A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zone namespace, so `zoneName` must be unique across the whole cluster rather than per Kubernetes namespace. Every `Zone` names the `TechnitiumCluster` it belongs to via `spec.serverRef.name`; the reconciler resolves that instance's endpoint and admin credentials on its own, so nothing further needs configuring.
 
