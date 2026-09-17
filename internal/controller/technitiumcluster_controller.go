@@ -12,6 +12,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -64,6 +66,37 @@ type bootstrapAPI interface {
 	CreateToken(ctx context.Context, tokenName string) (string, error)
 }
 
+// nodeAPI is the slice of the Technitium client the per-node status read
+// needs. It exists so tests can substitute a fake client without spinning up
+// a real Technitium server, and so the controller does not depend on
+// technitium.Client directly for a call this narrow.
+type nodeAPI interface {
+	GetClusterState(ctx context.Context) (*technitium.ClusterState, error)
+}
+
+// loginNodeClient wraps a *technitium.Client built with WithCredentials so
+// GetClusterState authenticates itself. nodeClientFactory's signature has no
+// context to Login with up front (it mirrors bootstrapClientFactory, called
+// from a context-free field), so the token is instead minted lazily on first
+// use here.
+type loginNodeClient struct {
+	*technitium.Client
+}
+
+// GetClusterState logs in on first use, since the wrapped client is built
+// from credentials alone and never logs in on construction, then delegates.
+// A login failure is returned as-is: the caller (the controller) treats any
+// error from this method as "node not readable yet", the same handling a
+// GetClusterState transport error already gets.
+func (n *loginNodeClient) GetClusterState(ctx context.Context) (*technitium.ClusterState, error) {
+	if n.Client.Token() == "" {
+		if _, err := n.Client.Login(ctx); err != nil {
+			return nil, fmt.Errorf("logging in to node: %w", err)
+		}
+	}
+	return n.Client.GetClusterState(ctx)
+}
+
 // TechnitiumClusterReconciler provisions and drift-corrects the workload
 // backing a TechnitiumCluster: a StatefulSet, a client Service, a headless
 // Service, and (unless spec.adminSecretRef is set) a generated admin Secret.
@@ -86,6 +119,12 @@ type TechnitiumClusterReconciler struct {
 	// a fake token endpoint; production wiring leaves it nil and
 	// bootstrapClientFactory supplies a real *technitium.Client.
 	NewBootstrapClient func(endpoint, username, password string) (bootstrapAPI, error)
+	// NewNodeClient builds a client to a single StatefulSet ordinal's own API
+	// endpoint (see nodeEndpoint), using the same admin credentials every pod
+	// shares. It is a seam so tests can inject a fake per-node endpoint;
+	// production wiring leaves it nil and nodeClientFactory supplies a real,
+	// self-authenticating client.
+	NewNodeClient func(endpoint, username, password string) (nodeAPI, error)
 }
 
 // bootstrapClientFactory returns r.NewBootstrapClient, defaulting it to a
@@ -98,6 +137,32 @@ func (r *TechnitiumClusterReconciler) bootstrapClientFactory() func(endpoint, us
 	return func(endpoint, username, password string) (bootstrapAPI, error) {
 		return technitium.NewClient(endpoint, technitium.WithCredentials(username, password))
 	}
+}
+
+// nodeClientFactory returns r.NewNodeClient, defaulting it to a real
+// self-authenticating Technitium client the first time it is needed. main.go
+// leaves the field nil, so production wiring never has to know about this
+// seam.
+func (r *TechnitiumClusterReconciler) nodeClientFactory() func(endpoint, username, password string) (nodeAPI, error) {
+	if r.NewNodeClient != nil {
+		return r.NewNodeClient
+	}
+	return func(endpoint, username, password string) (nodeAPI, error) {
+		c, err := technitium.NewClient(endpoint, technitium.WithCredentials(username, password))
+		if err != nil {
+			return nil, err
+		}
+		return &loginNodeClient{Client: c}, nil
+	}
+}
+
+// nodeEndpoint is a single StatefulSet ordinal's own API address: the
+// headless Service governing the StatefulSet gives each pod a stable DNS name
+// of "<sts>-<ordinal>.<headless-service>", unlike the client Service's
+// endpoint (used for bootstrap and Zone reconciliation), which load-balances
+// across whichever pod happens to answer.
+func nodeEndpoint(clusterName string, ordinal int32, namespace string) string {
+	return fmt.Sprintf("http://%s-%d.%s.%s.svc:5380", clusterName, ordinal, headlessServiceName(clusterName), namespace)
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=technitiumclusters,verbs=get;list;watch;update;patch
@@ -177,19 +242,9 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 func (r *TechnitiumClusterReconciler) ensureToken(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, endpoint string) (bool, error) {
 	log := logf.FromContext(ctx)
 
-	secretNamespace := r.OperatorNamespace
-	secretName := adminSecretName(tc.Name)
-	if tc.Spec.AdminSecretRef != nil {
-		secretName = tc.Spec.AdminSecretRef.Name
-		if tc.Spec.AdminSecretRef.Namespace != "" {
-			secretNamespace = tc.Spec.AdminSecretRef.Namespace
-		}
-	}
-	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
-
-	var secret corev1.Secret
-	if err := r.Get(ctx, secretKey, &secret); err != nil {
-		return false, fmt.Errorf("getting admin secret %s: %w", secretKey, err)
+	secret, secretKey, err := r.resolveAdminSecret(ctx, tc)
+	if err != nil {
+		return false, err
 	}
 
 	if len(secret.Data[adminSecretTokenKey]) > 0 {
@@ -218,11 +273,55 @@ func (r *TechnitiumClusterReconciler) ensureToken(ctx context.Context, tc *dnsv1
 	}
 
 	secret.Data[adminSecretTokenKey] = []byte(token)
-	if err := r.Update(ctx, &secret); err != nil {
+	if err := r.Update(ctx, secret); err != nil {
 		return false, fmt.Errorf("writing admin token to secret %s: %w", secretKey, err)
 	}
 
 	return true, nil
+}
+
+// resolveAdminSecret fetches the admin Secret for tc: the generated
+// "<name>-admin" Secret, or spec.adminSecretRef when set. It is shared by
+// ensureToken (which also writes the minted token back into it) and
+// adminCredentials (which only reads username/password for per-node client
+// construction).
+func (r *TechnitiumClusterReconciler) resolveAdminSecret(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*corev1.Secret, client.ObjectKey, error) {
+	secretNamespace := r.OperatorNamespace
+	secretName := adminSecretName(tc.Name)
+	if tc.Spec.AdminSecretRef != nil {
+		secretName = tc.Spec.AdminSecretRef.Name
+		if tc.Spec.AdminSecretRef.Namespace != "" {
+			secretNamespace = tc.Spec.AdminSecretRef.Namespace
+		}
+	}
+	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
+
+	var secret corev1.Secret
+	if err := r.Get(ctx, secretKey, &secret); err != nil {
+		return nil, secretKey, fmt.Errorf("getting admin secret %s: %w", secretKey, err)
+	}
+	return &secret, secretKey, nil
+}
+
+// adminCredentials reads the username and password out of tc's admin Secret.
+// It is what every per-node client is built with: each pod shares the same
+// local admin login, there being no separate per-node identity until a real
+// cluster (with its own node accounts) exists.
+func (r *TechnitiumClusterReconciler) adminCredentials(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (username, password string, err error) {
+	secret, secretKey, err := r.resolveAdminSecret(ctx, tc)
+	if err != nil {
+		return "", "", err
+	}
+
+	u := secret.Data[adminSecretUsernameKey]
+	if len(u) == 0 {
+		return "", "", fmt.Errorf("admin secret %s has no %q key", secretKey, adminSecretUsernameKey)
+	}
+	p := secret.Data[adminSecretPasswordKey]
+	if len(p) == 0 {
+		return "", "", fmt.Errorf("admin secret %s has no %q key", secretKey, adminSecretPasswordKey)
+	}
+	return string(u), string(p), nil
 }
 
 // reconcileWorkload brings the headless Service, client Service, admin
@@ -565,6 +664,22 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		changed = true
 	}
 
+	// Node state is only worth reading once the workload itself is up, the
+	// same gate ensureToken applies to bootstrap: querying a pod with no
+	// listener behind it yet is a wasted round trip this function's own
+	// short requeue will retry next poll anyway.
+	if readyReplicas >= desiredReplicas {
+		nodes, members := r.buildNodeStatuses(ctx, &tc, desiredReplicas)
+		if !reflect.DeepEqual(tc.Status.Nodes, nodes) {
+			tc.Status.Nodes = nodes
+			changed = true
+		}
+		if tc.Status.Members != members {
+			tc.Status.Members = members
+			changed = true
+		}
+	}
+
 	var (
 		phase             dnsv1alpha1.TechnitiumClusterPhase
 		reason, message   string
@@ -612,6 +727,136 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		return requeueAfter, nil
 	}
 	return requeueAfter, r.Status().Update(ctx, &tc)
+}
+
+// nodeReadyState and nodeNotReadyState are the placeholder states a node gets
+// before clustering exists (this phase implements no init/join yet) or when
+// its cluster state could not be read. They are distinct from the real
+// cluster membership states (Self, Connected, ...) Technitium itself reports
+// once a node has actually joined a cluster.
+const (
+	nodeReadyState    = "Ready"
+	nodeNotReadyState = "NotReady"
+)
+
+// roleForOrdinal reports the role a StatefulSet ordinal is assumed to hold
+// before a real cluster init/join exists: ordinal 0 is always the node
+// cluster/init would run against, so it is Primary independent of anything
+// the cluster API reports.
+func roleForOrdinal(ordinal int32) string {
+	if ordinal == 0 {
+		return "Primary"
+	}
+	return "Secondary"
+}
+
+// findClusterMember locates the entry in a clusterNodes response belonging to
+// podName. A cluster node's Name is "<hostname>.<clusterDomain>" while podName
+// is the bare StatefulSet pod name, so the match is a prefix rather than an
+// exact comparison.
+func findClusterMember(nodes []technitium.ClusterNode, podName string) *technitium.ClusterNode {
+	for i := range nodes {
+		if strings.HasPrefix(nodes[i].Name, podName) {
+			return &nodes[i]
+		}
+	}
+	return nil
+}
+
+// nodeJoined reports whether a node's status.state counts toward
+// status.members' joined count: the readiness placeholder Ready (there being
+// no real cluster yet in this phase) and the real cluster states Self and
+// Connected all mean the node is up and reachable.
+func nodeJoined(state string) bool {
+	switch state {
+	case nodeReadyState, "Self", "Connected":
+		return true
+	default:
+		return false
+	}
+}
+
+// buildNodeStatuses reads each StatefulSet ordinal's own cluster state and
+// reports a TechnitiumClusterNodeStatus per ordinal plus the rendered
+// "joined/total" members string. It never returns an error: a node whose
+// state could not be read is expected during the startup window (there is no
+// init/join in this phase yet, so every node starts out uninitialized) and is
+// reflected in that node's own State/Message rather than failing the whole
+// status update.
+func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, desiredReplicas int32) ([]dnsv1alpha1.TechnitiumClusterNodeStatus, string) {
+	log := logf.FromContext(ctx)
+
+	username, password, err := r.adminCredentials(ctx, tc)
+	if err != nil {
+		// The admin Secret itself is a controller-managed prerequisite
+		// (reconcileAdminSecret, or a caller's adminSecretRef): a problem
+		// with it already surfaces as Degraded once ensureToken runs against
+		// the same Secret, so this just marks every node unreadable rather
+		// than duplicating that failure path.
+		log.Info("Skipping node status read: admin credentials unavailable", "cluster", tc.Name, "error", err.Error())
+		nodes := make([]dnsv1alpha1.TechnitiumClusterNodeStatus, desiredReplicas)
+		for i := range nodes {
+			nodes[i] = dnsv1alpha1.TechnitiumClusterNodeStatus{
+				Name:    fmt.Sprintf("%s-%d", tc.Name, i),
+				Role:    roleForOrdinal(int32(i)),
+				State:   "Unknown",
+				Message: "admin credentials unavailable",
+			}
+		}
+		return nodes, fmt.Sprintf("0/%d", desiredReplicas)
+	}
+
+	nodes := make([]dnsv1alpha1.TechnitiumClusterNodeStatus, desiredReplicas)
+	joined := 0
+	for i := int32(0); i < desiredReplicas; i++ {
+		podName := fmt.Sprintf("%s-%d", tc.Name, i)
+		status := dnsv1alpha1.TechnitiumClusterNodeStatus{
+			Name:  podName,
+			Role:  roleForOrdinal(i),
+			State: nodeReadyState,
+		}
+
+		nodeClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, i, r.OperatorNamespace), username, password)
+		if err != nil {
+			status.State = nodeNotReadyState
+			status.Message = err.Error()
+			nodes[i] = status
+			continue
+		}
+
+		state, err := nodeClient.GetClusterState(ctx)
+		if err != nil {
+			// Expected pre-cluster and during pod startup: the caller only
+			// reaches here once the workload as a whole reports ready, but a
+			// single ordinal's own API can still lag the aggregate
+			// readyReplicas count by a poll or two.
+			log.Info("Node cluster state not yet readable", "cluster", tc.Name, "node", podName, "error", err.Error())
+			status.State = nodeNotReadyState
+			status.Message = "cluster state not yet reachable"
+			nodes[i] = status
+			continue
+		}
+
+		if state.ClusterInitialized {
+			if member := findClusterMember(state.Nodes, podName); member != nil {
+				status.Role = member.Type
+				status.State = member.State
+				if member.ConfigLastSynced != nil {
+					status.LastSynced = &metav1.Time{Time: *member.ConfigLastSynced}
+				}
+			}
+		}
+		// An uninitialized node (or one whose own report has not yet listed
+		// itself) keeps the readiness-derived Role/State set above: there is
+		// no real cluster membership to override it with yet.
+
+		if nodeJoined(status.State) {
+			joined++
+		}
+		nodes[i] = status
+	}
+
+	return nodes, fmt.Sprintf("%d/%d", joined, desiredReplicas)
 }
 
 // markDegraded re-fetches the TechnitiumCluster and records a failed
