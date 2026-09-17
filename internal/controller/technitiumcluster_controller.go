@@ -746,7 +746,38 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 		}
 	}
 
-	return allJoined, nil
+	if !allJoined {
+		// A secondary pod was not ready, or its API not yet reachable, this
+		// pass. Requeue and re-attempt rather than asserting convergence off an
+		// incomplete set of nodes.
+		return false, nil
+	}
+
+	// A secondary's own initJoin returning success is not the same as the
+	// cluster having converged: the primary keeps a freshly joined secondary in
+	// "Unknown" until it establishes its heartbeat to it, which lags the join
+	// by seconds to minutes. status.members is derived from this same primary
+	// clusterNodes view, so returning clustered off the secondaries'
+	// self-reported ClusterInitialized would flap the resource to Ready while
+	// status.members still reads "1/2". Gate convergence on the primary's
+	// authoritative view instead, so Ready means every secondary is Connected.
+	convergedState, err := primaryClient.GetClusterState(ctx)
+	if err != nil {
+		log.Info("Deferring cluster convergence: primary state not re-readable",
+			"cluster", tc.Name, "error", err.Error())
+		return false, nil
+	}
+	for i := int32(1); i < desiredReplicas; i++ {
+		podName := fmt.Sprintf("%s-%d", tc.Name, i)
+		member := findClusterMember(convergedState.Nodes, podName)
+		if member == nil || !nodeJoined(member.State) {
+			log.Info("Deferring cluster convergence: secondary joined but not yet Connected on primary",
+				"cluster", tc.Name, "ordinal", i)
+			return false, nil
+		}
+	}
+
+	return true, nil
 }
 
 // reconcileWorkload brings the headless Service, client Service, admin

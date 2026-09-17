@@ -80,10 +80,14 @@ setup-test-e2e:
         "{{ kind }}" create cluster --name "{{ kind_cluster }}"
     fi
 
-# Run the e2e tests. Expects an isolated environment using Kind
+# Run the e2e tests. Expects an isolated environment using Kind.
+# -timeout must exceed the suite's cumulative budget: cert-manager install (up
+# to 5m) plus the clustering spec's own 10m Eventually for a 2-node init/join.
+# Go's default 10m kills the binary mid-join, which surfaces as a bare
+# "test timed out after 10m0s" panic rather than a Ginkgo failure.
 [group('Development')]
 test-e2e: setup-test-e2e manifests generate fmt vet
-    KIND="{{ kind }}" KIND_CLUSTER="{{ kind_cluster }}" go test -tags=e2e ./test/e2e/ -v -ginkgo.v
+    KIND="{{ kind }}" KIND_CLUSTER="{{ kind_cluster }}" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout 30m
     @just cleanup-test-e2e
 
 # Tear down the Kind cluster used for e2e tests
