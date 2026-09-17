@@ -1,0 +1,30 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: Record
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: record-sample-a
+spec:
+  serverRef:
+    name: dns-sample
+  zone: example.com
+  name: www.example.com
+  type: A
+  data: 203.0.113.10
+---
+apiVersion: dns.packet.fail/v1alpha1
+kind: Record
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: record-sample-mx
+spec:
+  serverRef:
+    name: dns-sample
+  zone: example.com
+  name: example.com
+  type: MX
+  data: mail.example.com
+  priority: 10

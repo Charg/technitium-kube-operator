@@ -41,8 +41,11 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
-  - technitiumclusters
+  - records
+  - zones
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch
@@ -51,6 +54,7 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
+  - records/finalizers
   - technitiumclusters/finalizers
   - zones/finalizers
   verbs:
@@ -58,6 +62,7 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
+  - records/status
   - technitiumclusters/status
   - zones/status
   verbs:
@@ -67,10 +72,8 @@ rules:
 - apiGroups:
   - dns.packet.fail
   resources:
-  - zones
+  - technitiumclusters
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch

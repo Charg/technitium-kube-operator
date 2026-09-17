@@ -25,6 +25,12 @@ var (
 	// either call on such a node is the expected steady state once clustering
 	// has converged, so callers treat it as success.
 	ErrClusterAlreadyInitialized = errors.New("technitium: cluster already initialized")
+	// ErrRecordAlreadyExists and ErrRecordNotFound are the record-scoped
+	// counterparts of the zone sentinels above, used by AddRecord/DeleteRecord
+	// so record reconciliation can be idempotent the same way zone
+	// reconciliation is.
+	ErrRecordAlreadyExists = errors.New("technitium: record already exists")
+	ErrRecordNotFound      = errors.New("technitium: record not found")
 )
 
 // APIError carries a Technitium error response that does not map to a sentinel.
@@ -52,7 +58,10 @@ func (e *APIError) Error() string {
 // classifyStatus maps a decoded response envelope to an error. Technitium does
 // not use distinct status codes for "already exists" and "not found"; both come
 // back as status "error" with a human-readable errorMessage, so the message
-// text is the only signal available to distinguish them.
+// text is the only signal available to distinguish them. The same phrasing is
+// used for both zones and records ("Zone already exists" vs "Record already
+// exists"), so the message is checked a second time for "record" to pick the
+// sentinel pair that matches the resource actually being classified.
 func classifyStatus(status, message string) error {
 	switch status {
 	case "ok":
@@ -62,14 +71,22 @@ func classifyStatus(status, message string) error {
 	}
 
 	lower := strings.ToLower(message)
+	isRecord := strings.Contains(lower, "record")
 	switch {
 	case strings.Contains(lower, "already initialized"):
 		return fmt.Errorf("%w: %s", ErrClusterAlreadyInitialized, message)
 	case strings.Contains(lower, "already exists"):
+		if isRecord {
+			return fmt.Errorf("%w: %s", ErrRecordAlreadyExists, message)
+		}
 		return fmt.Errorf("%w: %s", ErrZoneAlreadyExists, message)
 	case strings.Contains(lower, "no such zone"),
+		strings.Contains(lower, "no such record"),
 		strings.Contains(lower, "not found"),
 		strings.Contains(lower, "does not exist"):
+		if isRecord {
+			return fmt.Errorf("%w: %s", ErrRecordNotFound, message)
+		}
 		return fmt.Errorf("%w: %s", ErrZoneNotFound, message)
 	default:
 		return &APIError{Status: status, Message: message}
