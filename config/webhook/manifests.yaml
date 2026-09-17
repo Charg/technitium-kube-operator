@@ -10,6 +10,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /mutate-dns-packet-fail-v1alpha1-record
+  failurePolicy: Fail
+  name: mrecord-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - records
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /mutate-dns-packet-fail-v1alpha1-zone
   failurePolicy: Fail
   name: mzone-v1alpha1.kb.io
@@ -30,6 +50,26 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: validating-webhook-configuration
 webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-dns-packet-fail-v1alpha1-record
+  failurePolicy: Fail
+  name: vrecord-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - records
+  sideEffects: None
 - admissionReviewVersions:
   - v1
   clientConfig:

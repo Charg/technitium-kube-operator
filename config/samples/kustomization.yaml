@@ -2,4 +2,5 @@
 resources:
 - dns_v1alpha1_zone.yaml
 - dns_v1alpha1_technitiumcluster.yaml
+- dns_v1alpha1_record.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

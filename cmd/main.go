@@ -195,10 +195,22 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "technitiumcluster")
 		os.Exit(1)
 	}
+	if err := (&controller.RecordReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "record")
+		os.Exit(1)
+	}
 	// nolint:goconst
 	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
 		if err := webhookv1alpha1.SetupZoneWebhookWithManager(mgr); err != nil {
 			setupLog.Error(err, "Failed to create webhook", "webhook", "Zone")
+			os.Exit(1)
+		}
+		if err := webhookv1alpha1.SetupRecordWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "Record")
 			os.Exit(1)
 		}
 	}
