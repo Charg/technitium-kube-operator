@@ -53,6 +53,12 @@ linters:
           - dupl
           - lll
         path: internal/*
+      # Test fixtures repeat literals (IPs, zone names, tokens) for readability;
+      # hoisting each into a constant hurts more than it helps here. goconst
+      # still guards non-test code.
+      - linters:
+          - goconst
+        path: _test\.go
     paths:
       - third_party$
       - builtin$
