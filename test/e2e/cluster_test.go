@@ -59,7 +59,7 @@ spec:
 		output, err := utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(output).To(Equal("Ready"), "TechnitiumCluster phase not Ready yet")
-	}, 8*time.Minute, 5*time.Second).Should(Succeed())
+	}, 10*time.Minute, 5*time.Second).Should(Succeed())
 
 	wantMembers := fmt.Sprintf("%d/%d", replicas, replicas)
 	cmd := exec.Command("kubectl", "get", "technitiumcluster", name,

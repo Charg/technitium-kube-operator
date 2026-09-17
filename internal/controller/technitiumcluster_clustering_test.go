@@ -42,6 +42,12 @@ type fakeClusterState struct {
 	secondaryJoined    bool
 	initCalls          int
 	joinCalls          int
+	// secondaryStaysUnknown models the real gap between a secondary's initJoin
+	// returning success (secondaryJoined) and the primary establishing its
+	// heartbeat to it: while set, the primary lists the joined secondary in
+	// state "Unknown" rather than "Connected", exactly as a real primary does
+	// for the seconds-to-minutes before convergence.
+	secondaryStaysUnknown bool
 }
 
 // fakeClusterNode is a nodeAPI stand-in for one ordinal that reads and
@@ -73,10 +79,15 @@ func (f *fakeClusterNode) GetClusterState(ctx context.Context) (*technitium.Clus
 	}
 	if f.shared.secondaryJoined {
 		now := metav1.Now().Time
-		nodes = append(nodes, technitium.ClusterNode{
+		secondary := technitium.ClusterNode{
 			ID: 2, Name: fmt.Sprintf("%s-1.cluster.local", f.shared.podPrefix),
 			Type: "Secondary", State: "Connected", ConfigLastSynced: &now,
-		})
+		}
+		if f.shared.secondaryStaysUnknown {
+			secondary.State = "Unknown"
+			secondary.ConfigLastSynced = nil
+		}
+		nodes = append(nodes, secondary)
 	}
 	return &technitium.ClusterState{ClusterInitialized: true, ClusterDomain: "cluster.local", Nodes: nodes}, nil
 }
@@ -260,6 +271,48 @@ var _ = Describe("TechnitiumCluster Controller clustering", func() {
 			Expect(cr.Status.Nodes[1].Role).To(Equal("Secondary"))
 			Expect(cr.Status.Nodes[1].State).To(Equal("Connected"))
 			Expect(cr.Status.Nodes[1].LastSynced).NotTo(BeNil())
+		})
+
+		It("stays in Clustering until the primary reports the secondary Connected, not merely joined", func() {
+			createClusterCR()
+			// The secondary's own initJoin has landed, but the primary has not
+			// yet established its heartbeat: it lists the secondary "Unknown".
+			shared.secondaryStaysUnknown = true
+
+			r := newReconciler()
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			createPod(0, "10.0.0.1")
+			createPod(1, "10.0.0.2")
+			markStatefulSetReady(2)
+
+			// initJoin is attempted and returns success, but the primary's
+			// authoritative view still shows the secondary Unknown, so the
+			// resource must not claim Ready: status.members would read "1/2".
+			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(clusterPollInterval))
+
+			var cr dnsv1alpha1.TechnitiumCluster
+			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+			Expect(cr.Status.Phase).To(Equal(dnsv1alpha1.TechnitiumClusterPhaseClustering))
+			Expect(cr.Status.Members).To(Equal("1/2"))
+			Expect(shared.joinCalls).To(Equal(1))
+
+			// Once the primary sees the secondary Connected, the next reconcile
+			// converges to Ready without re-driving init/join.
+			shared.mu.Lock()
+			shared.secondaryStaysUnknown = false
+			shared.mu.Unlock()
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+			Expect(cr.Status.Phase).To(Equal(dnsv1alpha1.TechnitiumClusterPhaseReady))
+			Expect(cr.Status.Members).To(Equal("2/2"))
+			Expect(shared.joinCalls).To(Equal(1))
 		})
 
 		It("does not call init or initJoin again once both nodes report clusterInitialized", func() {
