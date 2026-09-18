@@ -40,6 +40,20 @@ type CreateZoneOptions struct {
 	// PrimaryNameServerAddresses lists the primary name server addresses used by
 	// Secondary and Stub zones.
 	PrimaryNameServerAddresses []string
+	// DNSSECValidation enables DNSSEC validation of responses from the upstream
+	// resolver of a Forwarder zone.
+	DNSSECValidation *bool
+	// ProxyType selects the proxy protocol a Forwarder zone routes its upstream
+	// queries through. Empty defers to the server default (no proxy).
+	ProxyType string
+	// ProxyAddress is the proxy server's hostname or IP address.
+	ProxyAddress string
+	// ProxyPort is the proxy server's port.
+	ProxyPort *int32
+	// ProxyUsername authenticates to the proxy server, when it requires it.
+	ProxyUsername string
+	// ProxyPassword authenticates to the proxy server, when it requires it.
+	ProxyPassword string
 }
 
 // ZoneOptionsUpdate describes a mutation to an existing zone. Nil fields are
@@ -50,6 +64,9 @@ type ZoneOptionsUpdate struct {
 	Catalog *string
 	// Disabled enables or disables the zone.
 	Disabled *bool
+	// DNSSECValidation enables or disables DNSSEC validation of a Forwarder
+	// zone's upstream responses.
+	DNSSECValidation *bool
 }
 
 // ZoneInfo is a single entry from /api/zones/list.
@@ -66,12 +83,13 @@ type ZoneInfo struct {
 // ZoneOptions is the subset of /api/zones/options/get relevant to reconciling a
 // zone.
 type ZoneOptions struct {
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	Internal     bool   `json:"internal"`
-	DNSSECStatus string `json:"dnssecStatus"`
-	Disabled     bool   `json:"disabled"`
-	Catalog      string `json:"catalog"`
+	Name             string `json:"name"`
+	Type             string `json:"type"`
+	Internal         bool   `json:"internal"`
+	DNSSECStatus     string `json:"dnssecStatus"`
+	Disabled         bool   `json:"disabled"`
+	Catalog          string `json:"catalog"`
+	DnssecValidation bool   `json:"dnssecValidation"`
 }
 
 // zoneParams builds a query carrying the required zone name, or an error when
@@ -107,6 +125,24 @@ func (c *Client) CreateZone(ctx context.Context, opts CreateZoneOptions) error {
 	}
 	if len(opts.PrimaryNameServerAddresses) > 0 {
 		params.Set("primaryNameServerAddresses", strings.Join(opts.PrimaryNameServerAddresses, ","))
+	}
+	if opts.DNSSECValidation != nil {
+		params.Set("dnssecValidation", strconv.FormatBool(*opts.DNSSECValidation))
+	}
+	if opts.ProxyType != "" {
+		params.Set("proxyType", opts.ProxyType)
+	}
+	if opts.ProxyAddress != "" {
+		params.Set("proxyAddress", opts.ProxyAddress)
+	}
+	if opts.ProxyPort != nil {
+		params.Set("proxyPort", strconv.Itoa(int(*opts.ProxyPort)))
+	}
+	if opts.ProxyUsername != "" {
+		params.Set("proxyUsername", opts.ProxyUsername)
+	}
+	if opts.ProxyPassword != "" {
+		params.Set("proxyPassword", opts.ProxyPassword)
 	}
 
 	return c.do(ctx, "/api/zones/create", params, nil)
@@ -152,6 +188,9 @@ func (c *Client) SetZoneOptions(ctx context.Context, zone string, opts ZoneOptio
 	}
 	if opts.Disabled != nil {
 		params.Set("disabled", strconv.FormatBool(*opts.Disabled))
+	}
+	if opts.DNSSECValidation != nil {
+		params.Set("dnssecValidation", strconv.FormatBool(*opts.DNSSECValidation))
 	}
 
 	return c.do(ctx, "/api/zones/options/set", params, nil)

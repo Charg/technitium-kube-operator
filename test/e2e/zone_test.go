@@ -101,6 +101,36 @@ spec:
 	}, time.Minute, 3*time.Second).Should(Succeed())
 }
 
+// applyForwarderZone creates a Forwarder Zone CR with DNSSEC validation enabled,
+// targeting the given TechnitiumCluster over the given transport protocol. The
+// proxy fields are left out: the e2e cluster has no proxy server to exercise
+// them against, so forwarderProxy is covered by unit and envtest coverage only.
+func applyForwarderZone(name, zoneName, serverRef, forwarder, protocol string) {
+	manifest := fmt.Sprintf(`
+apiVersion: dns.packet.fail/v1alpha1
+kind: Zone
+metadata:
+  name: %s
+spec:
+  serverRef:
+    name: %s
+  zoneName: %s
+  type: Forwarder
+  forwarder: %s
+  forwarderProtocol: %s
+  dnssecValidation: true
+`, name, serverRef, zoneName, forwarder, protocol)
+	path := writeManifest("zone-"+name, manifest)
+
+	// The admission webhook can still be settling, so retry until the apply is
+	// accepted rather than failing on a transient dial error.
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "apply", "-f", path)
+		_, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+	}, time.Minute, 3*time.Second).Should(Succeed())
+}
+
 // applyManifest writes a manifest to a temp file and applies it once.
 func applyManifest(name, manifest string) {
 	cmd := exec.Command("kubectl", "apply", "-f", writeManifest(name, manifest))

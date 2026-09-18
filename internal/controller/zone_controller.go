@@ -321,6 +321,14 @@ func (r *ZoneReconciler) reconcileOptions(ctx context.Context, api ZoneAPI, zone
 	if zone.Spec.Catalog != nil && current.Catalog != *zone.Spec.Catalog {
 		update.Catalog = zone.Spec.Catalog
 	}
+	if zone.Spec.DNSSECValidation != nil && current.DnssecValidation != *zone.Spec.DNSSECValidation {
+		update.DNSSECValidation = zone.Spec.DNSSECValidation
+	}
+
+	// forwarderProxy is intentionally not reconciled here: /api/zones/options/get
+	// never returns proxyPassword, so there is no way to tell a drifted proxy
+	// config from an in-sync one without risking a spurious re-set that leaks or
+	// clobbers a password the server already has. It is applied once at create.
 
 	if update == (technitium.ZoneOptionsUpdate{}) {
 		return nil
@@ -352,6 +360,21 @@ func createOptionsFromSpec(zone *dnsv1alpha1.Zone) technitium.CreateZoneOptions 
 	}
 	if spec.Catalog != nil {
 		opts.Catalog = *spec.Catalog
+	}
+	opts.DNSSECValidation = spec.DNSSECValidation
+	if spec.ForwarderProxy != nil {
+		proxy := spec.ForwarderProxy
+		opts.ProxyType = string(proxy.Type)
+		if proxy.Address != nil {
+			opts.ProxyAddress = *proxy.Address
+		}
+		opts.ProxyPort = proxy.Port
+		if proxy.Username != nil {
+			opts.ProxyUsername = *proxy.Username
+		}
+		if proxy.Password != nil {
+			opts.ProxyPassword = *proxy.Password
+		}
 	}
 	return opts
 }

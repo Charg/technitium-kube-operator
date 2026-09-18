@@ -39,6 +39,46 @@ const (
 	ForwarderProtocolQUIC  ForwarderProtocol = "Quic"
 )
 
+// ProxyType is the kind of proxy a Forwarder zone routes its upstream queries
+// through. The values map to the `proxyType` parameter of the Technitium
+// create-zone API.
+// +kubebuilder:validation:Enum=NoProxy;Http;Socks5
+type ProxyType string
+
+const (
+	ProxyTypeNoProxy ProxyType = "NoProxy"
+	ProxyTypeHTTP    ProxyType = "Http"
+	ProxyTypeSOCKS5  ProxyType = "Socks5"
+)
+
+// ForwarderProxy routes a Forwarder zone's queries to its upstream resolver
+// through a proxy instead of dialing it directly.
+type ForwarderProxy struct {
+	// type selects the proxy protocol. NoProxy disables proxying even when the
+	// other fields are set.
+	// +required
+	Type ProxyType `json:"type"`
+
+	// address is the proxy server's hostname or IP address. Required for Http
+	// and Socks5.
+	// +optional
+	Address *string `json:"address,omitempty"`
+
+	// port is the proxy server's port. Required for Http and Socks5.
+	// +optional
+	Port *int32 `json:"port,omitempty"`
+
+	// username authenticates to the proxy server, when it requires it.
+	// +optional
+	Username *string `json:"username,omitempty"`
+
+	// password authenticates to the proxy server, when it requires it. Technitium
+	// does not return this value from /api/zones/options/get, so the controller
+	// can only set it at zone creation and cannot detect or correct drift on it.
+	// +optional
+	Password *string `json:"password,omitempty"`
+}
+
 // DeletionPolicy controls the fate of the server-side zone when a Zone resource
 // is deleted.
 // +kubebuilder:validation:Enum=Delete;Orphan
@@ -96,6 +136,16 @@ type ZoneSpec struct {
 	// member. Applies to Primary, Secondary, Stub, and Forwarder zones.
 	// +optional
 	Catalog *string `json:"catalog,omitempty"`
+
+	// dnssecValidation enables DNSSEC validation of responses from the upstream
+	// resolver of a Forwarder zone. Meaningful only for type Forwarder.
+	// +optional
+	DNSSECValidation *bool `json:"dnssecValidation,omitempty"`
+
+	// forwarderProxy routes a Forwarder zone's upstream queries through a proxy.
+	// Meaningful only for type Forwarder.
+	// +optional
+	ForwarderProxy *ForwarderProxy `json:"forwarderProxy,omitempty"`
 
 	// deletionPolicy controls what happens to the server-side zone when this
 	// resource is deleted. "Delete" (the default) removes the zone from the

@@ -129,6 +129,81 @@ var _ = Describe("Zone Webhook", func() {
 			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
 			Expect(validator.ValidateUpdate(ctx, oldObj, obj)).Error().NotTo(HaveOccurred())
 		})
+
+		It("rejects dnssecValidation on a non-Forwarder zone", func() {
+			validation := true
+			obj.Spec.ZoneName = testZoneName
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
+			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
+			obj.Spec.DNSSECValidation = &validation
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("dnssecValidation"))
+		})
+
+		It("rejects forwarderProxy on a non-Forwarder zone", func() {
+			obj.Spec.ZoneName = testZoneName
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
+			obj.Spec.Type = dnsv1alpha1.ZoneTypePrimary
+			obj.Spec.ForwarderProxy = &dnsv1alpha1.ForwarderProxy{Type: dnsv1alpha1.ProxyTypeNoProxy}
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("forwarderProxy"))
+		})
+
+		It("admits dnssecValidation and a NoProxy forwarderProxy on a Forwarder zone", func() {
+			fwd := "1.1.1.1"
+			validation := true
+			obj.Spec.ZoneName = "fwd.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
+			obj.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+			obj.Spec.Forwarder = &fwd
+			obj.Spec.DNSSECValidation = &validation
+			obj.Spec.ForwarderProxy = &dnsv1alpha1.ForwarderProxy{Type: dnsv1alpha1.ProxyTypeNoProxy}
+			Expect(validator.ValidateCreate(ctx, obj)).Error().NotTo(HaveOccurred())
+		})
+
+		It("rejects an Http forwarderProxy without an address and port", func() {
+			fwd := "1.1.1.1"
+			obj.Spec.ZoneName = "fwd.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
+			obj.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+			obj.Spec.Forwarder = &fwd
+			obj.Spec.ForwarderProxy = &dnsv1alpha1.ForwarderProxy{Type: dnsv1alpha1.ProxyTypeHTTP}
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("address"))
+			Expect(err.Error()).To(ContainSubstring("port"))
+		})
+
+		It("admits a Socks5 forwarderProxy with an address and port", func() {
+			fwd := "1.1.1.1"
+			proxyAddress := "proxy.example.com"
+			proxyPort := int32(1080)
+			obj.Spec.ZoneName = "fwd.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
+			obj.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+			obj.Spec.Forwarder = &fwd
+			obj.Spec.ForwarderProxy = &dnsv1alpha1.ForwarderProxy{
+				Type:    dnsv1alpha1.ProxyTypeSOCKS5,
+				Address: &proxyAddress,
+				Port:    &proxyPort,
+			}
+			Expect(validator.ValidateCreate(ctx, obj)).Error().NotTo(HaveOccurred())
+		})
+
+		It("rejects a NoProxy forwarderProxy carrying an address", func() {
+			fwd := "1.1.1.1"
+			proxyAddress := "proxy.example.com"
+			obj.Spec.ZoneName = "fwd.example.com"
+			obj.Spec.ServerRef = dnsv1alpha1.SecretReference{Name: testServerName}
+			obj.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+			obj.Spec.Forwarder = &fwd
+			obj.Spec.ForwarderProxy = &dnsv1alpha1.ForwarderProxy{Type: dnsv1alpha1.ProxyTypeNoProxy, Address: &proxyAddress}
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("address"))
+		})
 	})
 
 })

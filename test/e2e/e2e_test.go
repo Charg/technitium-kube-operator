@@ -532,6 +532,28 @@ var _ = Describe("Manager", Ordered, func() {
 				_, err := utils.Run(cmd)
 				Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
 			})
+
+			It("reconciles a Forwarder Zone with DNSSEC validation through to Ready and cleans it up on delete", func() {
+				const forwarderZone = "e2e-forwarder-zone"
+				const forwarderZoneName = "forwarder.example.com"
+
+				By("applying a Forwarder Zone over TLS with dnssecValidation enabled")
+				applyForwarderZone(forwarderZone, forwarderZoneName, configCluster, "1.1.1.1", "Tls")
+
+				verifyForwarderZoneReady := func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "zone", forwarderZone,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("True"), "Forwarder Zone not Ready yet")
+				}
+				Eventually(verifyForwarderZoneReady, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+				By("deleting the Forwarder Zone")
+				cmd := exec.Command("kubectl", "delete", "zone", forwarderZone, "--wait=true", "--timeout=90s")
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
+			})
 		})
 	})
 })
