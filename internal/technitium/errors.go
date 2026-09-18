@@ -31,6 +31,12 @@ var (
 	// reconciliation is.
 	ErrRecordAlreadyExists = errors.New("technitium: record already exists")
 	ErrRecordNotFound      = errors.New("technitium: record not found")
+	// ErrAppAlreadyInstalled and ErrAppNotInstalled are the DNS Apps
+	// counterparts of the zone/record sentinels above, used by
+	// DownloadAndInstallApp/UninstallApp so DNSApp reconciliation can be
+	// idempotent the same way zone and record reconciliation are.
+	ErrAppAlreadyInstalled = errors.New("technitium: app already installed")
+	ErrAppNotInstalled     = errors.New("technitium: app not installed")
 )
 
 // APIError carries a Technitium error response that does not map to a sentinel.
@@ -59,9 +65,10 @@ func (e *APIError) Error() string {
 // not use distinct status codes for "already exists" and "not found"; both come
 // back as status "error" with a human-readable errorMessage, so the message
 // text is the only signal available to distinguish them. The same phrasing is
-// used for both zones and records ("Zone already exists" vs "Record already
-// exists"), so the message is checked a second time for "record" to pick the
-// sentinel pair that matches the resource actually being classified.
+// used for zones, records, and apps ("Zone already exists" vs "Record already
+// exists" vs "app already installed"), so the message is checked a second time
+// for "record" or "app" to pick the sentinel pair that matches the resource
+// actually being classified.
 func classifyStatus(status, message string) error {
 	switch status {
 	case "ok":
@@ -72,22 +79,33 @@ func classifyStatus(status, message string) error {
 
 	lower := strings.ToLower(message)
 	isRecord := strings.Contains(lower, "record")
+	isApp := strings.Contains(lower, "app")
 	switch {
 	case strings.Contains(lower, "already initialized"):
 		return fmt.Errorf("%w: %s", ErrClusterAlreadyInitialized, message)
-	case strings.Contains(lower, "already exists"):
-		if isRecord {
+	case strings.Contains(lower, "already exists"), strings.Contains(lower, "already installed"):
+		switch {
+		case isRecord:
 			return fmt.Errorf("%w: %s", ErrRecordAlreadyExists, message)
+		case isApp:
+			return fmt.Errorf("%w: %s", ErrAppAlreadyInstalled, message)
+		default:
+			return fmt.Errorf("%w: %s", ErrZoneAlreadyExists, message)
 		}
-		return fmt.Errorf("%w: %s", ErrZoneAlreadyExists, message)
 	case strings.Contains(lower, "no such zone"),
 		strings.Contains(lower, "no such record"),
+		strings.Contains(lower, "no such app"),
+		strings.Contains(lower, "not installed"),
 		strings.Contains(lower, "not found"),
 		strings.Contains(lower, "does not exist"):
-		if isRecord {
+		switch {
+		case isRecord:
 			return fmt.Errorf("%w: %s", ErrRecordNotFound, message)
+		case isApp:
+			return fmt.Errorf("%w: %s", ErrAppNotInstalled, message)
+		default:
+			return fmt.Errorf("%w: %s", ErrZoneNotFound, message)
 		}
-		return fmt.Errorf("%w: %s", ErrZoneNotFound, message)
 	default:
 		return &APIError{Status: status, Message: message}
 	}

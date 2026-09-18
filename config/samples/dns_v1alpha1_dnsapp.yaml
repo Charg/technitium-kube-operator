@@ -1,0 +1,13 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: DNSApp
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dnsapp-sample
+spec:
+  serverRef:
+    name: dns-sample
+  appName: Split Horizon
+  url: https://download.technitium.com/dns/apps/SplitHorizonApp-v4.zip
+  deletionPolicy: Delete

@@ -8,6 +8,7 @@ resources:
 - bases/dns.packet.fail_serversettings.yaml
 - bases/dns.packet.fail_blocklists.yaml
 - bases/dns.packet.fail_dnssecs.yaml
+- bases/dns.packet.fail_dnsapps.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

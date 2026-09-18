@@ -507,6 +507,22 @@ var _ = Describe("Manager", Ordered, func() {
 				deleteBlocklistAndVerifyGone("e2e-blocklist", namespace)
 			})
 
+			It("reconciles a DNSApp through to Ready and cleans it up on delete", func() {
+				// Split Horizon is a lightweight store app with no external
+				// dependencies, making it a safe fixture for an install/uninstall
+				// round trip. The URL is the current store zip from Technitium's
+				// published app catalog (go.technitium.com/?id=44).
+				const appName = "Split Horizon"
+				const appURL = "https://download.technitium.com/dns/apps/SplitHorizonApp-v4.zip"
+
+				By("installing a DNS App and waiting for Ready")
+				applyDNSApp("e2e-dnsapp", namespace, configCluster, appName, appURL)
+				verifyDNSAppReady("e2e-dnsapp", namespace)
+
+				By("deleting the DNSApp and verifying the app was uninstalled")
+				deleteDNSAppAndVerifyGone("e2e-dnsapp", namespace)
+			})
+
 			It("reconciles a DNSSEC through to Ready and cleans it up on delete", func() {
 				By("applying the config zone the DNSSEC resource signs")
 				applyZone(configZone, configZoneName, configCluster)
