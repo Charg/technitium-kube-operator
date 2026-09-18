@@ -1,0 +1,19 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: DNSSEC
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dnssec-sample
+spec:
+  serverRef:
+    name: dns-sample
+  zone: example.com
+  algorithm: ECDSA
+  curve: P256
+  nsecType: NSEC3
+  nsec3Iterations: 1
+  nsec3SaltLength: 8
+  dnsKeyTtl: 3600
+  zskRolloverDays: 90
+  deletionPolicy: Delete

@@ -42,6 +42,7 @@ rules:
   - dns.packet.fail
   resources:
   - blocklists
+  - dnssecs
   - records
   - serversettings
   - zones
@@ -57,6 +58,7 @@ rules:
   - dns.packet.fail
   resources:
   - blocklists/finalizers
+  - dnssecs/finalizers
   - records/finalizers
   - serversettings/finalizers
   - technitiumclusters/finalizers
@@ -67,6 +69,7 @@ rules:
   - dns.packet.fail
   resources:
   - blocklists/status
+  - dnssecs/status
   - records/status
   - serversettings/status
   - technitiumclusters/status

@@ -506,6 +506,32 @@ var _ = Describe("Manager", Ordered, func() {
 				By("deleting the Blocklist and verifying the server-side overrides were cleaned up")
 				deleteBlocklistAndVerifyGone("e2e-blocklist", namespace)
 			})
+
+			It("reconciles a DNSSEC through to Ready and cleans it up on delete", func() {
+				By("applying the config zone the DNSSEC resource signs")
+				applyZone(configZone, configZoneName, configCluster)
+
+				verifyZoneReady := func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "zone", configZone,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("True"), "Zone not Ready yet")
+				}
+				Eventually(verifyZoneReady, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+				By("applying a DNSSEC resource against the zone and waiting for Ready")
+				applyDNSSEC("e2e-dnssec", namespace, configCluster, configZoneName)
+				verifyDNSSECReady("e2e-dnssec", namespace)
+
+				By("deleting the DNSSEC resource and verifying the zone was unsigned")
+				deleteDNSSECAndVerifyGone("e2e-dnssec", namespace)
+
+				By("deleting the config zone")
+				cmd := exec.Command("kubectl", "delete", "zone", configZone, "--wait=true", "--timeout=90s")
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
+			})
 		})
 	})
 })
