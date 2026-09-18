@@ -436,6 +436,77 @@ var _ = Describe("Manager", Ordered, func() {
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 		})
+
+		// A single TechnitiumCluster backs all three config-CRD specs so the
+		// suite pays the image-pull and first-boot budget once rather than once
+		// per resource. ServerSettings and Blocklist both write through
+		// /api/settings; running them as ordered specs, each deleted before the
+		// next applies, keeps them off one another's fields.
+		Context("config CRDs against a real instance", Ordered, func() {
+			const configCluster = "e2e-config"
+			const configZone = "e2e-config-zone"
+			const configZoneName = "config.example.com"
+
+			BeforeAll(func() {
+				By("provisioning a TechnitiumCluster for the config CRD specs")
+				deployTechnitiumCluster(configCluster)
+
+				By("waiting for the webhook endpoint to be reachable")
+				waitForWebhookEndpointReady()
+			})
+
+			AfterAll(func() {
+				By("deleting the config TechnitiumCluster")
+				cmd := exec.Command("kubectl", "delete", "technitiumcluster", configCluster, "--wait=true", "--timeout=90s")
+				_, _ = utils.Run(cmd)
+			})
+
+			It("reconciles a Record through to Ready and cleans it up on delete", func() {
+				By("applying the parent Zone the Record writes into")
+				applyZone(configZone, configZoneName, configCluster)
+
+				verifyZoneReady := func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "zone", configZone,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("True"), "Zone not Ready yet")
+				}
+				Eventually(verifyZoneReady, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+				By("applying an A Record into the zone and waiting for Ready")
+				applyRecord("e2e-record", namespace, configZoneName, "www."+configZoneName, configCluster, "203.0.113.10")
+				verifyRecordReady("e2e-record", namespace)
+
+				By("deleting the Record and verifying the server-side record was cleaned up")
+				deleteRecordAndVerifyGone("e2e-record", namespace)
+
+				By("deleting the parent Zone")
+				cmd := exec.Command("kubectl", "delete", "zone", configZone, "--wait=true", "--timeout=90s")
+				_, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
+			})
+
+			It("reconciles a ServerSettings through to Ready and cleans it up on delete", func() {
+				By("applying a forwarder and waiting for Ready")
+				applyServerSettings("e2e-serversettings", namespace, configCluster, "1.1.1.1")
+				verifyServerSettingsReady("e2e-serversettings", namespace)
+
+				By("deleting the ServerSettings")
+				deleteServerSettingsAndVerifyGone("e2e-serversettings", namespace)
+			})
+
+			It("reconciles a Blocklist through to Ready and cleans it up on delete", func() {
+				By("applying a block list URL plus allowed and blocked domains and waiting for Ready")
+				applyBlocklist("e2e-blocklist", namespace, configCluster,
+					"https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts",
+					"safe.example.com", "ads.example.com")
+				verifyBlocklistReady("e2e-blocklist", namespace)
+
+				By("deleting the Blocklist and verifying the server-side overrides were cleaned up")
+				deleteBlocklistAndVerifyGone("e2e-blocklist", namespace)
+			})
+		})
 	})
 })
 
