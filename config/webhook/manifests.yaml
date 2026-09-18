@@ -30,6 +30,26 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /mutate-dns-packet-fail-v1alpha1-dhcpscope
+  failurePolicy: Fail
+  name: mdhcpscope-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - dhcpscopes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /mutate-dns-packet-fail-v1alpha1-dnsapp
   failurePolicy: Fail
   name: mdnsapp-v1alpha1.kb.io
@@ -149,6 +169,26 @@ webhooks:
     - UPDATE
     resources:
     - blocklists
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-dns-packet-fail-v1alpha1-dhcpscope
+  failurePolicy: Fail
+  name: vdhcpscope-v1alpha1.kb.io
+  rules:
+  - apiGroups:
+    - dns.packet.fail
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - dhcpscopes
   sideEffects: None
 - admissionReviewVersions:
   - v1

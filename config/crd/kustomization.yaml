@@ -9,6 +9,7 @@ resources:
 - bases/dns.packet.fail_blocklists.yaml
 - bases/dns.packet.fail_dnssecs.yaml
 - bases/dns.packet.fail_dnsapps.yaml
+- bases/dns.packet.fail_dhcpscopes.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

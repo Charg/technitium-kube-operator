@@ -37,6 +37,12 @@ var (
 	// idempotent the same way zone and record reconciliation are.
 	ErrAppAlreadyInstalled = errors.New("technitium: app already installed")
 	ErrAppNotInstalled     = errors.New("technitium: app not installed")
+	// ErrDHCPScopeNotFound and ErrDHCPReservationNotFound are the DHCP-scoped
+	// counterparts of the zone/record sentinels above, used by DeleteDHCPScope
+	// and RemoveReservedLease so DHCPScope reconciliation can be idempotent
+	// the same way zone and record reconciliation are.
+	ErrDHCPScopeNotFound       = errors.New("technitium: dhcp scope not found")
+	ErrDHCPReservationNotFound = errors.New("technitium: dhcp reservation not found")
 )
 
 // APIError carries a Technitium error response that does not map to a sentinel.
@@ -68,7 +74,9 @@ func (e *APIError) Error() string {
 // used for zones, records, and apps ("Zone already exists" vs "Record already
 // exists" vs "app already installed"), so the message is checked a second time
 // for "record" or "app" to pick the sentinel pair that matches the resource
-// actually being classified.
+// actually being classified. DHCP scope/reservation phrasing is unconfirmed
+// against a live server (see the package comment in dhcp.go), so "scope" and
+// "reservation"/"lease" are matched the same defensive way.
 func classifyStatus(status, message string) error {
 	switch status {
 	case "ok":
@@ -80,6 +88,8 @@ func classifyStatus(status, message string) error {
 	lower := strings.ToLower(message)
 	isRecord := strings.Contains(lower, "record")
 	isApp := strings.Contains(lower, "app")
+	isDHCPReservation := strings.Contains(lower, "reservation") || strings.Contains(lower, "lease")
+	isDHCPScope := strings.Contains(lower, "scope")
 	switch {
 	case strings.Contains(lower, "already initialized"):
 		return fmt.Errorf("%w: %s", ErrClusterAlreadyInitialized, message)
@@ -95,6 +105,8 @@ func classifyStatus(status, message string) error {
 	case strings.Contains(lower, "no such zone"),
 		strings.Contains(lower, "no such record"),
 		strings.Contains(lower, "no such app"),
+		strings.Contains(lower, "no such scope"),
+		strings.Contains(lower, "no reservation"),
 		strings.Contains(lower, "not installed"),
 		strings.Contains(lower, "not found"),
 		strings.Contains(lower, "does not exist"):
@@ -103,6 +115,10 @@ func classifyStatus(status, message string) error {
 			return fmt.Errorf("%w: %s", ErrRecordNotFound, message)
 		case isApp:
 			return fmt.Errorf("%w: %s", ErrAppNotInstalled, message)
+		case isDHCPReservation:
+			return fmt.Errorf("%w: %s", ErrDHCPReservationNotFound, message)
+		case isDHCPScope:
+			return fmt.Errorf("%w: %s", ErrDHCPScopeNotFound, message)
 		default:
 			return fmt.Errorf("%w: %s", ErrZoneNotFound, message)
 		}
