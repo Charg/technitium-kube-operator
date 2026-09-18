@@ -5,4 +5,5 @@ resources:
 - dns_v1alpha1_record.yaml
 - dns_v1alpha1_serversettings.yaml
 - dns_v1alpha1_blocklist.yaml
+- dns_v1alpha1_dnssec.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples
