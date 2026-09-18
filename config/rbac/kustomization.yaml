@@ -25,6 +25,9 @@ resources:
 - blocklist_admin_role.yaml
 - blocklist_editor_role.yaml
 - blocklist_viewer_role.yaml
+- dhcpscope_admin_role.yaml
+- dhcpscope_editor_role.yaml
+- dhcpscope_viewer_role.yaml
 - dnsapp_admin_role.yaml
 - dnsapp_editor_role.yaml
 - dnsapp_viewer_role.yaml

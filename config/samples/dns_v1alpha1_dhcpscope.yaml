@@ -1,0 +1,25 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: DHCPScope
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dhcpscope-sample
+spec:
+  serverRef:
+    name: dns-sample
+  scopeName: lan
+  startingAddress: 192.168.1.100
+  endingAddress: 192.168.1.200
+  subnetMask: 255.255.255.0
+  routerAddress: 192.168.1.1
+  dnsServers:
+    - 192.168.1.1
+  leaseTimeDays: 1
+  domainName: lan.example.com
+  enabled: true
+  reservations:
+    - hardwareAddress: "00:11:22:33:44:55"
+      ipAddress: 192.168.1.150
+      hostName: printer
+  deletionPolicy: Delete

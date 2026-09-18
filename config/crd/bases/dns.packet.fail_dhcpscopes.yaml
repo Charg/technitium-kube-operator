@@ -1,0 +1,295 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+  name: dhcpscopes.dns.packet.fail
+spec:
+  group: dns.packet.fail
+  names:
+    kind: DHCPScope
+    listKind: DHCPScopeList
+    plural: dhcpscopes
+    singular: dhcpscope
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.scopeName
+      name: Scope
+      type: string
+    - jsonPath: .spec.serverRef.name
+      name: Server
+      type: string
+    - jsonPath: .status.conditions[?(@.type=='Ready')].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          DHCPScope is the Schema for the dhcpscopes API.
+
+          DHCPScope is namespaced, matching Record and Blocklist: it configures a
+          referenced TechnitiumCluster by name and lives in whichever namespace owns
+          the configuration. DHCP is a separate subsystem from DNS on Technitium, so
+          this CRD's serverRef points at the same TechnitiumCluster but manages a
+          disjoint set of server-side state.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of DHCPScope
+            properties:
+              deletionPolicy:
+                default: Delete
+                description: |-
+                  deletionPolicy controls what happens to the server-side scope when this
+                  resource is deleted. "Delete" (the default) disables and removes the
+                  scope from the Technitium server. "Orphan" leaves the server scope
+                  intact and only clears the finalizer, which is useful for safe adoption
+                  or migration.
+                enum:
+                - Delete
+                - Orphan
+                type: string
+              dnsServers:
+                description: dnsServers is the set of DNS server addresses offered
+                  to clients.
+                items:
+                  type: string
+                type: array
+              domainName:
+                description: domainName is the DNS domain name offered to clients.
+                type: string
+              enabled:
+                default: true
+                description: |-
+                  enabled turns the scope on or off. Defaults to true, since a DHCPScope
+                  resource exists to serve leases.
+                type: boolean
+              endingAddress:
+                description: endingAddress is the last IP address in the scope's range.
+                type: string
+              leaseTimeDays:
+                description: |-
+                  leaseTimeDays is the day component of the lease duration offered to
+                  clients.
+                format: int32
+                type: integer
+              leaseTimeHours:
+                description: |-
+                  leaseTimeHours is the hour component of the lease duration offered to
+                  clients.
+                format: int32
+                type: integer
+              leaseTimeMinutes:
+                description: |-
+                  leaseTimeMinutes is the minute component of the lease duration offered
+                  to clients.
+                format: int32
+                type: integer
+              reservations:
+                description: |-
+                  reservations are static MAC-to-IP lease reservations. The resource owns
+                  exactly this set: reservations are added and removed on the server to
+                  match, keyed by hardwareAddress.
+                items:
+                  description: DHCPReservation is a static MAC-to-IP lease reservation
+                    within a DHCP scope.
+                  properties:
+                    comments:
+                      description: comments is a free-form note about the reservation.
+                      type: string
+                    hardwareAddress:
+                      description: |-
+                        hardwareAddress is the client's MAC address, for example
+                        "00:11:22:33:44:55". It identifies the reservation: the resource owns
+                        exactly the reservation set keyed by this field, and a change to it is
+                        treated as removing the old reservation and adding a new one.
+                      minLength: 1
+                      type: string
+                    hostName:
+                      description: hostName is the client host name associated with
+                        the reservation.
+                      type: string
+                    ipAddress:
+                      description: |-
+                        ipAddress is the address reserved for this hardware address. It must
+                        fall within the scope's startingAddress/endingAddress range.
+                      minLength: 1
+                      type: string
+                  required:
+                  - hardwareAddress
+                  - ipAddress
+                  type: object
+                type: array
+              routerAddress:
+                description: routerAddress is the default gateway address offered
+                  to clients.
+                type: string
+              scopeName:
+                description: |-
+                  scopeName is the DHCP scope's name on the server. It is required and
+                  immutable: change the name by deleting and recreating the resource,
+                  since renaming amounts to deleting one scope and creating a different
+                  one.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: scopeName is immutable
+                  rule: self == oldSelf
+              serverRef:
+                description: |-
+                  serverRef names the TechnitiumCluster this DHCP scope is created on. The
+                  referenced instance must be Ready. Only name is used: a TechnitiumCluster
+                  is cluster-scoped, so the webhook rejects serverRef.namespace if set.
+                properties:
+                  name:
+                    description: name is the Secret's name.
+                    type: string
+                  namespace:
+                    description: |-
+                      namespace is the Secret's namespace. Defaults to the operator's own
+                      namespace when empty, since credential Secrets are typically colocated
+                      with the operator rather than scattered across tenant namespaces.
+                    type: string
+                required:
+                - name
+                type: object
+              startingAddress:
+                description: startingAddress is the first IP address in the scope's
+                  range.
+                type: string
+              subnetMask:
+                description: |-
+                  subnetMask is the subnet mask for the scope's range, for example
+                  "255.255.255.0".
+                type: string
+            required:
+            - endingAddress
+            - scopeName
+            - serverRef
+            - startingAddress
+            - subnetMask
+            type: object
+          status:
+            description: status defines the observed state of DHCPScope
+            properties:
+              appliedReservations:
+                description: |-
+                  appliedReservations is the set of hardware addresses whose reservations
+                  the controller last applied to the server. It is the source of truth
+                  for which reservations to remove when one is dropped from the spec or
+                  the resource is deleted.
+                items:
+                  type: string
+                type: array
+              conditions:
+                description: |-
+                  conditions represent the current state of the DHCPScope resource.
+                  Each condition has a unique type and reflects the status of a specific
+                  aspect of the resource.
+
+                  Condition types set by the controller:
+                  - "Ready": the scope exists on the server and matches the spec
+                  - "Progressing": the controller is creating or updating the scope
+                  - "Degraded": a reconcile failed, with the cause in reason/message
+
+                  The status of each condition is one of True, False, or Unknown.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              observedGeneration:
+                description: |-
+                  observedGeneration is the .metadata.generation the controller last
+                  reconciled. A value behind .metadata.generation means the observed
+                  state is stale.
+                format: int64
+                type: integer
+              scopeCreated:
+                description: |-
+                  scopeCreated reports whether the scope currently exists on the
+                  Technitium server.
+                type: boolean
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

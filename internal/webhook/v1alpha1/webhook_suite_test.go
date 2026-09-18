@@ -112,6 +112,9 @@ var _ = BeforeSuite(func() {
 	err = SetupBlocklistWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 
+	err = SetupDHCPScopeWebhookWithManager(mgr)
+	Expect(err).NotTo(HaveOccurred())
+
 	err = SetupDNSSECWebhookWithManager(mgr)
 	Expect(err).NotTo(HaveOccurred())
 

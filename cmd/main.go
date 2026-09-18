@@ -244,6 +244,21 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	if err := (&controller.DHCPScopeReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		OperatorNamespace: operatorNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "Failed to create controller", "controller", "dhcpscope")
+		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupDHCPScopeWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "Failed to create webhook", "webhook", "DHCPScope")
+			os.Exit(1)
+		}
+	}
 	if err := (&controller.DNSSECReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),

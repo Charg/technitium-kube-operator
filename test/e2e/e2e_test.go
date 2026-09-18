@@ -507,6 +507,15 @@ var _ = Describe("Manager", Ordered, func() {
 				deleteBlocklistAndVerifyGone("e2e-blocklist", namespace)
 			})
 
+			It("reconciles a DHCPScope through to Ready and cleans it up on delete", func() {
+				By("applying a DHCP scope and reservation and waiting for Ready")
+				applyDHCPScope("e2e-dhcpscope", namespace, configCluster)
+				verifyDHCPScopeReady("e2e-dhcpscope", namespace)
+
+				By("deleting the DHCPScope and verifying the server-side scope was cleaned up")
+				deleteDHCPScopeAndVerifyGone("e2e-dhcpscope", namespace)
+			})
+
 			It("reconciles a DNSApp through to Ready and cleans it up on delete", func() {
 				// Split Horizon is a lightweight store app with no external
 				// dependencies, making it a safe fixture for an install/uninstall
