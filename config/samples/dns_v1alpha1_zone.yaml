@@ -21,3 +21,4 @@ spec:
   type: Forwarder
   forwarder: 10.0.0.53
   forwarderProtocol: Udp
+  dnssecValidation: true

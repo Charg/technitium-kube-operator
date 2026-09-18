@@ -110,6 +110,44 @@ func validateSpec(zone, oldZone *dnsv1alpha1.Zone) error {
 		}
 	}
 
+	// dnssecValidation and forwarderProxy only have meaning for a Forwarder zone:
+	// every other type queries authoritatively or has no upstream to validate or
+	// proxy against.
+	if zone.Spec.Type != dnsv1alpha1.ZoneTypeForwarder {
+		if zone.Spec.DNSSECValidation != nil {
+			errs = append(errs, field.Invalid(specPath.Child("dnssecValidation"), *zone.Spec.DNSSECValidation,
+				"dnssecValidation is only meaningful when type is Forwarder"))
+		}
+		if zone.Spec.ForwarderProxy != nil {
+			errs = append(errs, field.Invalid(specPath.Child("forwarderProxy"), zone.Spec.ForwarderProxy.Type,
+				"forwarderProxy is only meaningful when type is Forwarder"))
+		}
+	}
+
+	if proxy := zone.Spec.ForwarderProxy; proxy != nil {
+		proxyPath := specPath.Child("forwarderProxy")
+		switch proxy.Type {
+		case dnsv1alpha1.ProxyTypeHTTP, dnsv1alpha1.ProxyTypeSOCKS5:
+			if proxy.Address == nil || *proxy.Address == "" {
+				errs = append(errs, field.Required(proxyPath.Child("address"),
+					fmt.Sprintf("address is required when forwarderProxy.type is %s", proxy.Type)))
+			}
+			if proxy.Port == nil {
+				errs = append(errs, field.Required(proxyPath.Child("port"),
+					fmt.Sprintf("port is required when forwarderProxy.type is %s", proxy.Type)))
+			}
+		case dnsv1alpha1.ProxyTypeNoProxy:
+			if proxy.Address != nil {
+				errs = append(errs, field.Invalid(proxyPath.Child("address"), *proxy.Address,
+					"address must not be set when forwarderProxy.type is NoProxy"))
+			}
+			if proxy.Port != nil {
+				errs = append(errs, field.Invalid(proxyPath.Child("port"), *proxy.Port,
+					"port must not be set when forwarderProxy.type is NoProxy"))
+			}
+		}
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}

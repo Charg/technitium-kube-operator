@@ -74,6 +74,11 @@ spec:
                 - Delete
                 - Orphan
                 type: string
+              dnssecValidation:
+                description: |-
+                  dnssecValidation enables DNSSEC validation of responses from the upstream
+                  resolver of a Forwarder zone. Meaningful only for type Forwarder.
+                type: boolean
               forwarder:
                 description: |-
                   forwarder is the address (IP or hostname) of the upstream resolver used
@@ -92,6 +97,43 @@ spec:
                 - Https
                 - Quic
                 type: string
+              forwarderProxy:
+                description: |-
+                  forwarderProxy routes a Forwarder zone's upstream queries through a proxy.
+                  Meaningful only for type Forwarder.
+                properties:
+                  address:
+                    description: |-
+                      address is the proxy server's hostname or IP address. Required for Http
+                      and Socks5.
+                    type: string
+                  password:
+                    description: |-
+                      password authenticates to the proxy server, when it requires it. Technitium
+                      does not return this value from /api/zones/options/get, so the controller
+                      can only set it at zone creation and cannot detect or correct drift on it.
+                    type: string
+                  port:
+                    description: port is the proxy server's port. Required for Http
+                      and Socks5.
+                    format: int32
+                    type: integer
+                  type:
+                    description: |-
+                      type selects the proxy protocol. NoProxy disables proxying even when the
+                      other fields are set.
+                    enum:
+                    - NoProxy
+                    - Http
+                    - Socks5
+                    type: string
+                  username:
+                    description: username authenticates to the proxy server, when
+                      it requires it.
+                    type: string
+                required:
+                - type
+                type: object
               primaryNameServerAddresses:
                 description: |-
                   primaryNameServerAddresses lists the IP addresses or hostnames of the

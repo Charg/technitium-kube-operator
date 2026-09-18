@@ -60,6 +60,10 @@ func notFound(string) (*technitium.ZoneOptions, error) {
 	return nil, fmt.Errorf("%w: no such zone", technitium.ErrZoneNotFound)
 }
 
+// ptrBool returns the address of a bool literal, for spec fields that take a
+// *bool.
+func ptrBool(v bool) *bool { return &v }
+
 var _ = Describe("Zone Controller", func() {
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
@@ -239,6 +243,68 @@ var _ = Describe("Zone Controller", func() {
 			Expect(api.createCalls[0].Forwarder).To(Equal(forwarder))
 			Expect(api.createCalls[0].Protocol).To(Equal(string(protocol)))
 			Expect(api.createCalls[0].Catalog).To(Equal(catalog))
+		})
+
+		It("passes dnssecValidation and proxy options through on create", func() {
+			forwarder := "1.1.1.1"
+			protocol := dnsv1alpha1.ForwarderProtocolTLS
+			proxyAddress := "proxy.example.com"
+			proxyPort := int32(1080)
+			proxyUsername := "user"
+			proxyPassword := "pass"
+			createZoneCR(func(z *dnsv1alpha1.Zone) {
+				z.Spec.ZoneName = "fwd.example.com"
+				z.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+				z.Spec.Forwarder = &forwarder
+				z.Spec.ForwarderProtocol = &protocol
+				z.Spec.DNSSECValidation = ptrBool(true)
+				z.Spec.ForwarderProxy = &dnsv1alpha1.ForwarderProxy{
+					Type:     dnsv1alpha1.ProxyTypeSOCKS5,
+					Address:  &proxyAddress,
+					Port:     &proxyPort,
+					Username: &proxyUsername,
+					Password: &proxyPassword,
+				}
+			})
+			api := &fakeZoneAPI{getOptions: notFound}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(api.createCalls).To(HaveLen(1))
+			created := api.createCalls[0]
+			Expect(created.Forwarder).To(Equal(forwarder))
+			Expect(created.Protocol).To(Equal(string(protocol)))
+			Expect(created.DNSSECValidation).NotTo(BeNil())
+			Expect(*created.DNSSECValidation).To(BeTrue())
+			Expect(created.ProxyType).To(Equal(string(dnsv1alpha1.ProxyTypeSOCKS5)))
+			Expect(created.ProxyAddress).To(Equal(proxyAddress))
+			Expect(created.ProxyPort).NotTo(BeNil())
+			Expect(*created.ProxyPort).To(Equal(proxyPort))
+			Expect(created.ProxyUsername).To(Equal(proxyUsername))
+			Expect(created.ProxyPassword).To(Equal(proxyPassword))
+		})
+
+		It("corrects dnssecValidation drift on an existing forwarder zone", func() {
+			createZoneCR(func(z *dnsv1alpha1.Zone) {
+				z.Spec.ZoneName = "fwd.example.com"
+				z.Spec.Type = dnsv1alpha1.ZoneTypeForwarder
+				z.Spec.DNSSECValidation = ptrBool(true)
+			})
+			api := &fakeZoneAPI{
+				getOptions: func(zone string) (*technitium.ZoneOptions, error) {
+					return &technitium.ZoneOptions{
+						Name: zone, Type: string(dnsv1alpha1.ZoneTypeForwarder), DnssecValidation: false,
+					}, nil
+				},
+			}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.createCalls).To(BeEmpty())
+			Expect(api.setCalls).To(HaveLen(1))
+			Expect(api.setCalls[0].DNSSECValidation).NotTo(BeNil())
+			Expect(*api.setCalls[0].DNSSECValidation).To(BeTrue())
 		})
 
 		It("treats an already-existing zone on create as success", func() {

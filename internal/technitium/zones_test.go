@@ -74,6 +74,34 @@ func TestCreateZone(t *testing.T) {
 			body:      `{"status":"error","errorMessage":"Access was denied."}`,
 			wantErrIs: nil,
 		},
+		{
+			name: "dnssec validation and proxy params are sent",
+			opts: CreateZoneOptions{
+				Zone:             "fwd.example.com",
+				Type:             "Forwarder",
+				Forwarder:        "1.1.1.1",
+				Protocol:         "Tls",
+				DNSSECValidation: ptr(true),
+				ProxyType:        "Socks5",
+				ProxyAddress:     "proxy.example.com",
+				ProxyPort:        ptr(int32(1080)),
+				ProxyUsername:    "user",
+				ProxyPassword:    "pass",
+			},
+			body: statusOK,
+			wantQuery: url.Values{
+				paramZone:          {"fwd.example.com"},
+				paramType:          {"Forwarder"},
+				"forwarder":        {"1.1.1.1"},
+				"protocol":         {"Tls"},
+				"dnssecValidation": {"true"},
+				"proxyType":        {"Socks5"},
+				"proxyAddress":     {"proxy.example.com"},
+				"proxyPort":        {"1080"},
+				"proxyUsername":    {"user"},
+				"proxyPassword":    {"pass"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -134,17 +162,24 @@ func TestDeleteZone(t *testing.T) {
 
 func TestGetZoneOptions(t *testing.T) {
 	tests := []struct {
-		name      string
-		body      string
-		wantErrIs error
-		wantName  string
-		wantCat   string
+		name         string
+		body         string
+		wantErrIs    error
+		wantName     string
+		wantCat      string
+		wantDNSSECOn bool
 	}{
 		{
 			name:     nameSuccess,
 			body:     `{"response":{"name":"example.com","type":"Primary","disabled":false,"catalog":"cat1"},"status":"ok"}`,
 			wantName: "example.com",
 			wantCat:  "cat1",
+		},
+		{
+			name:         "dnssec validation enabled",
+			body:         `{"response":{"name":"fwd.example.com","type":"Forwarder","dnssecValidation":true},"status":"ok"}`,
+			wantName:     "fwd.example.com",
+			wantDNSSECOn: true,
 		},
 		{
 			name:      "missing zone",
@@ -173,6 +208,9 @@ func TestGetZoneOptions(t *testing.T) {
 			}
 			if opts.Catalog != tt.wantCat {
 				t.Errorf("Catalog = %q, want %q", opts.Catalog, tt.wantCat)
+			}
+			if opts.DnssecValidation != tt.wantDNSSECOn {
+				t.Errorf("DnssecValidation = %v, want %v", opts.DnssecValidation, tt.wantDNSSECOn)
 			}
 		})
 	}
@@ -206,6 +244,12 @@ func TestSetZoneOptions(t *testing.T) {
 			opts:      ZoneOptionsUpdate{},
 			body:      statusOK,
 			wantQuery: url.Values{paramZone: {testZone}},
+		},
+		{
+			name:      "sets dnssec validation",
+			opts:      ZoneOptionsUpdate{DNSSECValidation: ptr(true)},
+			body:      statusOK,
+			wantQuery: url.Values{paramZone: {testZone}, "dnssecValidation": {"true"}},
 		},
 		{
 			name:      "missing zone",
