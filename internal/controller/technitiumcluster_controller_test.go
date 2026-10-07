@@ -17,7 +17,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -198,6 +200,122 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(k8sClient.Get(ctx, stsKey, &sts)).To(Succeed())
 			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("technitium/dns-server:15.4.0"))
 			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
+		})
+
+		Context("scheduling controls", func() {
+			hardAffinity := func() *corev1.Affinity {
+				return &corev1.Affinity{
+					PodAntiAffinity: &corev1.PodAntiAffinity{
+						RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+							TopologyKey: "kubernetes.io/hostname",
+							LabelSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{"app.kubernetes.io/name": "technitium"},
+							},
+						}},
+					},
+				}
+			}
+			withReplicas := func(n int32) func(*dnsv1alpha1.TechnitiumCluster) {
+				return func(cr *dnsv1alpha1.TechnitiumCluster) { cr.Spec.Replicas = &n }
+			}
+			getSTS := func() appsv1.StatefulSet {
+				var sts appsv1.StatefulSet
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+				return sts
+			}
+			reconcileOnce := func(r *TechnitiumClusterReconciler) {
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			schedulingSpec := func(cr *dnsv1alpha1.TechnitiumCluster) {
+				cr.Spec.Affinity = hardAffinity()
+				cr.Spec.TopologySpreadConstraints = []corev1.TopologySpreadConstraint{{
+					MaxSkew:           1,
+					TopologyKey:       "topology.kubernetes.io/zone",
+					WhenUnsatisfiable: corev1.ScheduleAnyway,
+					LabelSelector: &metav1.LabelSelector{
+						MatchLabels: map[string]string{"app.kubernetes.io/name": "technitium"},
+					},
+				}}
+				cr.Spec.Tolerations = []corev1.Toleration{{
+					Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "dns", Effect: corev1.TaintEffectNoSchedule,
+				}}
+				cr.Spec.NodeSelector = map[string]string{"disktype": "ssd"}
+				cr.Spec.PriorityClassName = "system-cluster-critical"
+			}
+
+			It("passes affinity, spread constraints, tolerations, nodeSelector and priorityClassName to the pod template", func() {
+				createClusterCR(schedulingSpec)
+				reconcileOnce(newReconciler())
+
+				podSpec := getSTS().Spec.Template.Spec
+				Expect(podSpec.Affinity).To(Equal(hardAffinity()))
+				Expect(podSpec.TopologySpreadConstraints).To(HaveLen(1))
+				Expect(podSpec.TopologySpreadConstraints[0].TopologyKey).To(Equal("topology.kubernetes.io/zone"))
+				Expect(podSpec.Tolerations).To(ContainElement(HaveField("Key", "dedicated")))
+				Expect(podSpec.NodeSelector).To(Equal(map[string]string{"disktype": "ssd"}))
+				Expect(podSpec.PriorityClassName).To(Equal("system-cluster-critical"))
+			})
+
+			It("corrects hand-edited scheduling fields back to spec", func() {
+				createClusterCR(schedulingSpec)
+				r := newReconciler()
+				reconcileOnce(r)
+
+				sts := getSTS()
+				sts.Spec.Template.Spec.Tolerations = nil
+				sts.Spec.Template.Spec.NodeSelector = map[string]string{"hand": "edited"}
+				sts.Spec.Template.Spec.PriorityClassName = "system-node-critical"
+				sts.Spec.Template.Spec.Affinity = nil
+				Expect(k8sClient.Update(ctx, &sts)).To(Succeed())
+
+				reconcileOnce(r)
+
+				podSpec := getSTS().Spec.Template.Spec
+				Expect(podSpec.Tolerations).To(ContainElement(HaveField("Key", "dedicated")))
+				Expect(podSpec.NodeSelector).To(Equal(map[string]string{"disktype": "ssd"}))
+				Expect(podSpec.PriorityClassName).To(Equal("system-cluster-critical"))
+				Expect(podSpec.Affinity).To(Equal(hardAffinity()))
+			})
+
+			It("defaults to soft hostname anti-affinity when replicas > 1 and affinity is unset", func() {
+				createClusterCR(withReplicas(3))
+				reconcileOnce(newReconciler())
+
+				affinity := getSTS().Spec.Template.Spec.Affinity
+				Expect(affinity).NotTo(BeNil())
+				Expect(affinity.PodAntiAffinity).NotTo(BeNil())
+				Expect(affinity.PodAntiAffinity.RequiredDuringSchedulingIgnoredDuringExecution).To(BeEmpty())
+				Expect(affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution).To(HaveLen(1))
+				term := affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0]
+				Expect(term.Weight).To(Equal(int32(100)))
+				Expect(term.PodAffinityTerm.TopologyKey).To(Equal("kubernetes.io/hostname"))
+				Expect(term.PodAffinityTerm.LabelSelector.MatchLabels).To(Equal(instanceLabels(resourceName)))
+			})
+
+			It("sets no affinity when replicas is 1 and affinity is unset", func() {
+				createClusterCR(nil)
+				reconcileOnce(newReconciler())
+
+				Expect(getSTS().Spec.Template.Spec.Affinity).To(BeNil())
+			})
+
+			It("uses a user-supplied affinity verbatim with replicas > 1", func() {
+				createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+					withReplicas(3)(cr)
+					cr.Spec.Affinity = hardAffinity()
+				})
+				reconcileOnce(newReconciler())
+
+				Expect(getSTS().Spec.Template.Spec.Affinity).To(Equal(hardAffinity()))
+			})
+
+			It("does not mutate spec when applying the default affinity", func() {
+				cr := &dnsv1alpha1.TechnitiumCluster{Name: "x"}
+				cr.Spec.Replicas = ptr.To(int32(3))
+				_ = podTemplateFor(cr)
+				Expect(cr.Spec.Affinity).To(BeNil())
+			})
 		})
 
 		It("never regenerates an existing admin password", func() {

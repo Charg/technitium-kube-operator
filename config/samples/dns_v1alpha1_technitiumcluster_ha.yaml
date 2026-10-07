@@ -1,0 +1,21 @@
+apiVersion: dns.packet.fail/v1alpha1
+kind: TechnitiumCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: technitium-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: technitiumcluster-ha-sample
+spec:
+  replicas: 3
+  storage:
+    size: 1Gi
+  # Hard anti-affinity: each replica must land on a different node. Without
+  # this field the operator applies a soft (preferred) hostname anti-affinity.
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: technitium
+              app.kubernetes.io/instance: technitiumcluster-ha-sample

@@ -1031,7 +1031,12 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 	return corev1.PodTemplateSpec{
 		Labels: commonLabels(tc.Name),
 		Spec: corev1.PodSpec{
-			SecurityContext: podSecurityContext,
+			SecurityContext:           podSecurityContext,
+			Affinity:                  affinityFor(tc),
+			TopologySpreadConstraints: tc.Spec.TopologySpreadConstraints,
+			Tolerations:               tc.Spec.Tolerations,
+			NodeSelector:              tc.Spec.NodeSelector,
+			PriorityClassName:         tc.Spec.PriorityClassName,
 			Containers: []corev1.Container{
 				{
 					Name:  "dns-server",
@@ -1071,6 +1076,32 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 				{Name: "varlog", EmptyDir: &corev1.EmptyDirVolumeSource{}},
 				{Name: "tmp", EmptyDir: &corev1.EmptyDirVolumeSource{}},
 			},
+		},
+	}
+}
+
+// affinityFor returns spec.affinity verbatim when set. Otherwise, with more
+// than one replica, it returns a default soft pod anti-affinity on hostname.
+// It is soft (preferred, not required) so a multi-replica cluster still
+// schedules on single-node clusters such as Kind. Spreading matters at first
+// schedule because node-local storage pins each PVC, and so its pod, to the
+// node it was first placed on. It never mutates tc.Spec.
+func affinityFor(tc *dnsv1alpha1.TechnitiumCluster) *corev1.Affinity {
+	if tc.Spec.Affinity != nil {
+		return tc.Spec.Affinity
+	}
+	if tc.Spec.Replicas == nil || *tc.Spec.Replicas <= 1 {
+		return nil
+	}
+	return &corev1.Affinity{
+		PodAntiAffinity: &corev1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.WeightedPodAffinityTerm{{
+				Weight: 100,
+				PodAffinityTerm: corev1.PodAffinityTerm{
+					TopologyKey:   "kubernetes.io/hostname",
+					LabelSelector: &metav1.LabelSelector{MatchLabels: instanceLabels(tc.Name)},
+				},
+			}},
 		},
 	}
 }
