@@ -15,7 +15,9 @@ import (
 	. "github.com/onsi/gomega"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -420,9 +422,190 @@ var _ = Describe("createOptionsFromSpec", func() {
 			ZoneName: "example.com",
 			Type:     dnsv1alpha1.ZoneTypePrimary,
 		}}
-		opts := createOptionsFromSpec(zone)
+		opts := createOptionsFromSpec(zone, nil)
 		Expect(opts.Forwarder).To(BeEmpty())
 		Expect(opts.Protocol).To(BeEmpty())
 		Expect(opts.Catalog).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Zone cluster catalog", func() {
+	const clusterName = "catalog-cluster"
+	const zoneCRName = "catalog-zone"
+	const zoneName = "example.org"
+
+	ctx := context.Background()
+	zoneKey := types.NamespacedName{Name: zoneCRName}
+
+	newReconciler := func(api *fakeZoneAPI) *ZoneReconciler {
+		return &ZoneReconciler{
+			Client:            k8sClient,
+			Scheme:            k8sClient.Scheme(),
+			OperatorNamespace: "default",
+			NewServerClient: func(_ context.Context, _ dnsv1alpha1.SecretReference) (ZoneAPI, error) {
+				return api, nil
+			},
+		}
+	}
+
+	createCluster := func(replicas int32, domain string) {
+		Expect(k8sClient.Create(ctx, &dnsv1alpha1.TechnitiumCluster{
+			Name: clusterName,
+			Spec: dnsv1alpha1.TechnitiumClusterSpec{
+				Image:         "technitium/dns-server:15.4.0",
+				Replicas:      ptr.To(replicas),
+				ClusterDomain: domain,
+				Storage:       dnsv1alpha1.TechnitiumClusterStorageSpec{Size: resource.MustParse("1Gi")},
+			},
+		})).To(Succeed())
+	}
+
+	createZone := func(mutate func(*dnsv1alpha1.Zone)) {
+		z := &dnsv1alpha1.Zone{
+			Name: zoneCRName,
+			Spec: dnsv1alpha1.ZoneSpec{
+				ZoneName:  zoneName,
+				ServerRef: dnsv1alpha1.SecretReference{Name: clusterName},
+			},
+		}
+		if mutate != nil {
+			mutate(z)
+		}
+		Expect(k8sClient.Create(ctx, z)).To(Succeed())
+	}
+
+	reconcileZone := func(api *fakeZoneAPI) {
+		_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: zoneKey})
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	inCatalog := func(catalog string) func(string) (*technitium.ZoneOptions, error) {
+		return func(zone string) (*technitium.ZoneOptions, error) {
+			return &technitium.ZoneOptions{Name: zone, Type: string(dnsv1alpha1.ZoneTypePrimary), Catalog: catalog}, nil
+		}
+	}
+
+	AfterEach(func() {
+		z := &dnsv1alpha1.Zone{}
+		if err := k8sClient.Get(ctx, zoneKey, z); err == nil {
+			patch := client.MergeFrom(z.DeepCopy())
+			z.Finalizers = nil
+			_ = k8sClient.Patch(ctx, z, patch)
+			_ = k8sClient.Delete(ctx, z)
+		}
+		tc := &dnsv1alpha1.TechnitiumCluster{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: clusterName}, tc); err == nil {
+			_ = k8sClient.Delete(ctx, tc)
+		}
+	})
+
+	It("joins the cluster catalog on create when the cluster has several replicas", func() {
+		createCluster(2, "dns.example.net")
+		createZone(nil)
+		api := &fakeZoneAPI{getOptions: notFound}
+		reconcileZone(api)
+
+		Expect(api.createCalls).To(HaveLen(1))
+		Expect(api.createCalls[0].Catalog).To(Equal("cluster-catalog.dns.example.net"))
+	})
+
+	It("falls back to the derived cluster domain for the catalog name", func() {
+		createCluster(2, "")
+		createZone(nil)
+		api := &fakeZoneAPI{getOptions: notFound}
+		reconcileZone(api)
+
+		Expect(api.createCalls).To(HaveLen(1))
+		Expect(api.createCalls[0].Catalog).To(Equal("cluster-catalog." + clusterName + ".local"))
+	})
+
+	It("adds an existing zone without a catalog to the cluster catalog", func() {
+		createCluster(2, "dns.example.net")
+		createZone(nil)
+		api := &fakeZoneAPI{getOptions: inCatalog("")}
+		reconcileZone(api)
+
+		Expect(api.setCalls).To(HaveLen(1))
+		Expect(api.setCalls[0].Catalog).NotTo(BeNil())
+		Expect(*api.setCalls[0].Catalog).To(Equal("cluster-catalog.dns.example.net"))
+	})
+
+	It("leaves a zone already in the cluster catalog alone", func() {
+		createCluster(2, "dns.example.net")
+		createZone(nil)
+		api := &fakeZoneAPI{getOptions: inCatalog("cluster-catalog.dns.example.net")}
+		reconcileZone(api)
+
+		Expect(api.setCalls).To(BeEmpty())
+	})
+
+	It("keeps a zone out of any catalog when catalog is set to the empty string", func() {
+		createCluster(2, "dns.example.net")
+		createZone(func(z *dnsv1alpha1.Zone) { z.Spec.Catalog = ptr.To("") })
+
+		api := &fakeZoneAPI{getOptions: notFound}
+		reconcileZone(api)
+		Expect(api.createCalls).To(HaveLen(1))
+		Expect(api.createCalls[0].Catalog).To(BeEmpty())
+
+		existing := &fakeZoneAPI{getOptions: inCatalog("cluster-catalog.dns.example.net")}
+		reconcileZone(existing)
+		Expect(existing.setCalls).To(HaveLen(1))
+		Expect(existing.setCalls[0].Catalog).NotTo(BeNil())
+		Expect(*existing.setCalls[0].Catalog).To(BeEmpty())
+	})
+
+	It("prefers an explicit catalog over the cluster catalog", func() {
+		createCluster(2, "dns.example.net")
+		createZone(func(z *dnsv1alpha1.Zone) { z.Spec.Catalog = ptr.To("shared") })
+		api := &fakeZoneAPI{getOptions: notFound}
+		reconcileZone(api)
+
+		Expect(api.createCalls).To(HaveLen(1))
+		Expect(api.createCalls[0].Catalog).To(Equal("shared"))
+	})
+
+	It("does not manage the catalog for a single-replica cluster", func() {
+		createCluster(1, "dns.example.net")
+		createZone(nil)
+
+		api := &fakeZoneAPI{getOptions: notFound}
+		reconcileZone(api)
+		Expect(api.createCalls).To(HaveLen(1))
+		Expect(api.createCalls[0].Catalog).To(BeEmpty())
+
+		existing := &fakeZoneAPI{getOptions: inCatalog("other")}
+		reconcileZone(existing)
+		Expect(existing.setCalls).To(BeEmpty())
+	})
+
+	It("does not put a Catalog zone in a catalog", func() {
+		createCluster(2, "dns.example.net")
+		createZone(func(z *dnsv1alpha1.Zone) { z.Spec.Type = dnsv1alpha1.ZoneTypeCatalog })
+		api := &fakeZoneAPI{getOptions: notFound}
+		reconcileZone(api)
+
+		Expect(api.createCalls).To(HaveLen(1))
+		Expect(api.createCalls[0].Catalog).To(BeEmpty())
+	})
+
+	It("enqueues only the zones that reference the cluster", func() {
+		createCluster(2, "dns.example.net")
+		createZone(nil)
+		other := &dnsv1alpha1.Zone{
+			Name: "catalog-other-zone",
+			Spec: dnsv1alpha1.ZoneSpec{
+				ZoneName:  "other.example.org",
+				ServerRef: dnsv1alpha1.SecretReference{Name: "unrelated"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, other)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, other) })
+
+		tc := &dnsv1alpha1.TechnitiumCluster{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: clusterName}, tc)).To(Succeed())
+
+		reqs := newReconciler(&fakeZoneAPI{}).zonesForCluster(ctx, tc)
+		Expect(reqs).To(ConsistOf(reconcile.Request{NamespacedName: zoneKey}))
 	})
 })

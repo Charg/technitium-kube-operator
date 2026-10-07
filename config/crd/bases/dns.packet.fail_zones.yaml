@@ -62,6 +62,10 @@ spec:
                 description: |-
                   catalog is the name of an existing catalog zone that this zone joins as a
                   member. Applies to Primary, Secondary, Stub, and Forwarder zones.
+                  When unset, a zone of one of those types joins the cluster catalog
+                  "cluster-catalog.<clusterDomain>" if the referenced TechnitiumCluster has
+                  more than one replica, so the Secondaries serve it too. Set it to the
+                  empty string to keep the zone out of any catalog (Primary only).
                 type: string
               deletionPolicy:
                 default: Delete
