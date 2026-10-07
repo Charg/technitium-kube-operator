@@ -4,12 +4,12 @@ description: A Kubernetes operator for managing Technitium DNS servers
 type: application
 version: 0.1.0 # x-release-please-version
 appVersion: "0.1.0" # x-release-please-version
-home: https://github.com/charg/technitium-operator
+home: https://github.com/Charg/technitium-kube-operator
 sources:
-  - https://github.com/charg/technitium-operator
+  - https://github.com/Charg/technitium-kube-operator
 keywords:
   - dns
   - technitium
   - operator
 annotations:
-  org.opencontainers.image.source: https://github.com/charg/technitium-operator
+  org.opencontainers.image.source: https://github.com/Charg/technitium-kube-operator

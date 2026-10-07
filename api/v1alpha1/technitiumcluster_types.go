@@ -128,10 +128,11 @@ type TechnitiumClusterSpec struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// replicas is the number of independent Technitium instances to
-	// provision, each with its own PersistentVolumeClaim. It does not wire
-	// them into a Technitium cluster (init/join): every replica runs as its
-	// own standalone server until that is implemented.
+	// replicas is the number of Technitium instances to provision, each with
+	// its own PersistentVolumeClaim. A single replica runs as a standalone
+	// server. With more than one, ordinal 0 is the Primary: the operator
+	// initialises a Technitium cluster on it and joins every other ordinal to
+	// it as a Secondary.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1
 	// +optional

@@ -6,7 +6,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  repository: ghcr.io/charg/technitium-operator
+  repository: ghcr.io/charg/technitium-kube-operator
   # Defaults to the chart's appVersion when empty.
   tag: ""
   pullPolicy: IfNotPresent
@@ -74,6 +74,8 @@ terminationGracePeriodSeconds: 10
 
 webhook:
   # Enable the validating/defaulting admission webhooks for the operator's resources.
+  # Turn this on to have invalid resources rejected at apply time; with it off
+  # they are accepted and only fail later, reported in the resource's status.
   # Requires cert-manager in the cluster to issue the serving certificate.
   enabled: false
   # Port the webhook server listens on inside the container.

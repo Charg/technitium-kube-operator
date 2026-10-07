@@ -11,7 +11,7 @@ The operator's CRDs (*.dns.packet.fail) have been installed. List them with:
   kubectl get crd -o name | grep '\.dns\.packet\.fail$'
 
 Start by creating a TechnitiumCluster, then Zones and Records that reference it.
-Examples: https://github.com/charg/technitium-operator/tree/main/config/samples
+Examples: https://github.com/Charg/technitium-kube-operator/tree/main/config/samples
 {{- else }}
 
 CRD installation was disabled (crds.install=false). Make sure the operator's

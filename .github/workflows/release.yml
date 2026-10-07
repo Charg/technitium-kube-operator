@@ -9,8 +9,6 @@ permissions: {}
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  CHART_REPO: oci://ghcr.io/${{ github.repository_owner }}/charts
 
 jobs:
   image:
@@ -25,6 +23,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # OCI references must be lowercase, but the repository owner and name are not.
+      - name: Lowercase OCI references
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -84,6 +87,11 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
+      # OCI references must be lowercase, but the repository owner and name are not.
+      - name: Lowercase OCI references
+        run: |
+          echo "CHART_REPO=oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" >> "$GITHUB_ENV"
+
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
@@ -107,4 +115,6 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Sign chart
-        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/charts/technitium-operator@${{ steps.push.outputs.digest }}"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${CHART_REPO#oci://}/technitium-operator@${DIGEST}"
