@@ -24,7 +24,7 @@ With `spec.replicas` greater than 1, `<name>-0` initializes a Technitium cluster
 As a result:
 
 - While `<name>-0` is down, writes fail and are retried. Technitium does not promote a Secondary automatically. Secondaries keep serving DNS from what they last synced.
-- A zone reaches the Secondaries only if it is a member of the cluster's catalog zone. A `Primary`, `Secondary`, `Stub` or `Forwarder` `Zone` joins `cluster-catalog.<clusterDomain>` automatically. Set `spec.catalog: ""` to keep a zone on the Primary only, or name another catalog to override.
+- A zone reaches the Secondaries only if it is a member of the cluster's catalog zone. A `Primary`, `Secondary`, `Stub` or `Forwarder` `Zone` joins `cluster-catalog.<clusterDomain>` automatically. Set `spec.catalog: ""` to keep a zone on the Primary only (this removes it from any catalog, and queries that land on a Secondary fail for it), or name another catalog to override. Scaling back to one replica leaves existing membership in place.
 - Global settings (`ServerSettings`, block list URLs) and allowed/blocked entries sync to the Secondaries.
 - DHCP scopes are per node and do not sync. A `DHCPScope` is configured on the Primary only.
 
