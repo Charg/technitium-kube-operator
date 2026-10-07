@@ -1,0 +1,46 @@
+name: Verify generated files
+
+on:
+  push:
+  pull_request:
+
+permissions: {}
+
+jobs:
+  verify:
+    permissions:
+      contents: read
+    name: Run on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install just
+        run: curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      # Regenerates config/ from the kubebuilder markers and the Helm chart from config/.
+      - name: Regenerate manifests, code and chart
+        run: just manifests generate
+
+      - name: Check generated files are committed
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --short
+            git diff
+            echo "::error::Generated files are out of date. Run 'just manifests generate' and commit the result."
+            exit 1
+          fi
+
+      - name: Lint chart and check rendered output matches config/
+        run: just helm-verify

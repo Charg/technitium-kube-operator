@@ -1,6 +1,6 @@
 apiVersion: v2
 name: technitium-operator
-description: A Kubernetes operator for managing Technitium DNS zones
+description: A Kubernetes operator for managing Technitium DNS servers
 type: application
 version: 0.1.0 # x-release-please-version
 appVersion: "0.1.0" # x-release-please-version

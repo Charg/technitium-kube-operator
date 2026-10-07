@@ -16,10 +16,10 @@ imagePullSecrets: []
 ## @section CRDs
 
 crds:
-  # Install the Zone CustomResourceDefinition as part of this chart.
+  # Install the operator's CustomResourceDefinitions as part of this chart.
   install: true
-  # Annotate the CRD so `helm uninstall` does not delete it (and the Zone
-  # resources stored under it) along with the release.
+  # Annotate the CRDs so `helm uninstall` does not delete them (and the
+  # resources stored under them) along with the release.
   keep: true
 
 ## @section RBAC / ServiceAccount
@@ -33,10 +33,10 @@ rbac:
   # Create the ClusterRole/ClusterRoleBinding and leader-election Role/RoleBinding
   # required by the controller manager.
   create: true
-  # Create the additional zone-admin/zone-editor/zone-viewer ClusterRoles that
-  # cluster admins can bind to users/groups to delegate access to Zone resources.
-  # These are not used by the operator itself.
-  zoneAggregateRoles: true
+  # Create <kind>-admin/<kind>-editor/<kind>-viewer ClusterRoles for every
+  # operator kind, which cluster admins can bind to users/groups to delegate
+  # access. These are not used by the operator itself.
+  helperRoles: true
 
 ## @section Pod configuration
 
@@ -73,7 +73,7 @@ terminationGracePeriodSeconds: 10
 ## @section Admission webhook
 
 webhook:
-  # Enable the validating/defaulting admission webhook for Zone resources.
+  # Enable the validating/defaulting admission webhooks for the operator's resources.
   # Requires cert-manager in the cluster to issue the serving certificate.
   enabled: false
   # Port the webhook server listens on inside the container.

@@ -4,7 +4,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: zones.dns.packet.fail
+  name: dnsapps.dns.packet.fail
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
     {{- if .Values.crds.keep }}
@@ -15,18 +15,18 @@ metadata:
 spec:
   group: dns.packet.fail
   names:
-    kind: Zone
-    listKind: ZoneList
-    plural: zones
-    singular: zone
-  scope: Cluster
+    kind: DNSApp
+    listKind: DNSAppList
+    plural: dnsapps
+    singular: dnsapp
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.zoneName
-      name: Zone
+    - jsonPath: .spec.appName
+      name: App
       type: string
-    - jsonPath: .spec.type
-      name: Type
+    - jsonPath: .spec.serverRef.name
+      name: Server
       type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
@@ -38,12 +38,13 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Zone is the Schema for the zones API.
+          DNSApp is the Schema for the dnsapps API.
 
-          Zone is cluster-scoped: a Technitium server exposes one global zone namespace,
-          so a zoneName must be unique across the whole cluster rather than per
-          Kubernetes namespace. This avoids two namespaces silently declaring conflicting
-          state for the same zone on a single server.
+          DNSApp is namespaced, matching Record and Blocklist: a DNS App belongs to
+          whichever tenant namespace owns the workload or feature it supports, and
+          two namespaces are free to manage different apps (or their own instance of
+          the config surface) on the same server without contending for a single
+          cluster-scoped name.
         properties:
           apiVersion:
             description: |-
@@ -63,95 +64,39 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Zone
+            description: spec defines the desired state of DNSApp
             properties:
-              catalog:
+              appName:
                 description: |-
-                  catalog is the name of an existing catalog zone that this zone joins as a
-                  member. Applies to Primary, Secondary, Stub, and Forwarder zones.
+                  appName is the DNS App name as it appears in Technitium. It is required
+                  and immutable: renaming amounts to uninstalling one app and installing a
+                  different one, not an in-place update.
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: appName is immutable
+                  rule: self == oldSelf
+              config:
+                description: |-
+                  config is an opaque per-app configuration blob (raw JSON or another
+                  string format the app expects) passed through verbatim to the app's
+                  config endpoint. Not modeled per app, since each DNS App defines its own
+                  configuration format.
                 type: string
               deletionPolicy:
                 default: Delete
                 description: |-
-                  deletionPolicy controls what happens to the server-side zone when this
-                  resource is deleted. "Delete" (the default) removes the zone from the
-                  Technitium server. "Orphan" leaves the server zone intact and only clears
-                  the finalizer, which is useful for safe adoption or migration.
+                  deletionPolicy controls what happens to the installed app when this
+                  resource is deleted. "Delete" (the default) uninstalls the app from the
+                  Technitium server. "Orphan" leaves it installed and only clears the
+                  finalizer.
                 enum:
                 - Delete
                 - Orphan
                 type: string
-              dnssecValidation:
-                description: |-
-                  dnssecValidation enables DNSSEC validation of responses from the upstream
-                  resolver of a Forwarder zone. Meaningful only for type Forwarder.
-                type: boolean
-              forwarder:
-                description: |-
-                  forwarder is the address (IP or hostname) of the upstream resolver used
-                  by a Forwarder zone. The special value "this-server" forwards to the
-                  local DNS server. Ignored by other zone types.
-                type: string
-              forwarderProtocol:
-                description: |-
-                  forwarderProtocol is the transport used to reach the forwarder of a
-                  Forwarder zone. Defaults to Udp on the server when unset. Ignored by
-                  other zone types.
-                enum:
-                - Udp
-                - Tcp
-                - Tls
-                - Https
-                - Quic
-                type: string
-              forwarderProxy:
-                description: |-
-                  forwarderProxy routes a Forwarder zone's upstream queries through a proxy.
-                  Meaningful only for type Forwarder.
-                properties:
-                  address:
-                    description: |-
-                      address is the proxy server's hostname or IP address. Required for Http
-                      and Socks5.
-                    type: string
-                  password:
-                    description: |-
-                      password authenticates to the proxy server, when it requires it. Technitium
-                      does not return this value from /api/zones/options/get, so the controller
-                      can only set it at zone creation and cannot detect or correct drift on it.
-                    type: string
-                  port:
-                    description: port is the proxy server's port. Required for Http
-                      and Socks5.
-                    format: int32
-                    type: integer
-                  type:
-                    description: |-
-                      type selects the proxy protocol. NoProxy disables proxying even when the
-                      other fields are set.
-                    enum:
-                    - NoProxy
-                    - Http
-                    - Socks5
-                    type: string
-                  username:
-                    description: username authenticates to the proxy server, when
-                      it requires it.
-                    type: string
-                required:
-                - type
-                type: object
-              primaryNameServerAddresses:
-                description: |-
-                  primaryNameServerAddresses lists the IP addresses or hostnames of the
-                  primary name server. Used by Secondary and Stub zones to locate the
-                  upstream primary; ignored by other zone types.
-                items:
-                  type: string
-                type: array
               serverRef:
                 description: |-
-                  serverRef names the TechnitiumCluster this zone is created on. The
+                  serverRef names the TechnitiumCluster this DNS App is installed on. The
                   referenced instance must be Ready. Only name is used: a TechnitiumCluster
                   is cluster-scoped, so the webhook rejects serverRef.namespace if set.
                 properties:
@@ -167,47 +112,35 @@ spec:
                 required:
                 - name
                 type: object
-              type:
-                default: Primary
-                description: type is the category of zone to create on the Technitium
-                  server.
-                enum:
-                - Primary
-                - Secondary
-                - Stub
-                - Forwarder
-                - Catalog
-                type: string
-              zoneName:
+              url:
                 description: |-
-                  zoneName is the fully qualified DNS name of the zone, for example
-                  "example.com". It is required and immutable: change the name by deleting
-                  and recreating the resource, since renaming a live zone on the server is
-                  not a safe in-place operation.
-                maxLength: 253
-                pattern: ^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$
+                  url is the store or download URL of the app package, used both to
+                  install the app and to update it to a newer version.
+                minLength: 1
                 type: string
-                x-kubernetes-validations:
-                - message: zoneName is immutable
-                  rule: self == oldSelf
+              version:
+                description: |-
+                  version is the version to keep the app at. When set and it differs from
+                  the version currently installed, the controller downloads and updates
+                  the app from url. Left unset, the controller only installs the app and
+                  never updates an already-installed version.
+                type: string
             required:
+            - appName
             - serverRef
-            - zoneName
+            - url
             type: object
           status:
-            description: status defines the observed state of Zone
+            description: status defines the observed state of DNSApp
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the Zone resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
+                  conditions represent the current state of the DNSApp resource.
 
                   Condition types set by the controller:
-                  - "Ready": the zone exists on the server and matches the spec
-                  - "Progressing": the controller is creating or updating the zone
+                  - "Ready": the app is installed on the server and matches the spec
+                  - "Progressing": the controller is installing, updating, or configuring the app
                   - "Degraded": a reconcile failed, with the cause in reason/message
-
-                  The status of each condition is one of True, False, or Unknown.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -266,18 +199,17 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              installedVersion:
+                description: |-
+                  installedVersion is the app version last observed installed on the
+                  server.
+                type: string
               observedGeneration:
                 description: |-
                   observedGeneration is the .metadata.generation the controller last
-                  reconciled. A value behind .metadata.generation means the observed state
-                  is stale.
+                  reconciled.
                 format: int64
                 type: integer
-              zoneCreated:
-                description: |-
-                  zoneCreated reports whether the zone currently exists on the Technitium
-                  server.
-                type: boolean
             type: object
         required:
         - spec

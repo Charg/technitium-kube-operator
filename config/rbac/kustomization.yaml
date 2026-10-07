@@ -34,9 +34,15 @@ resources:
 - dnssec_admin_role.yaml
 - dnssec_editor_role.yaml
 - dnssec_viewer_role.yaml
+- record_admin_role.yaml
+- record_editor_role.yaml
+- record_viewer_role.yaml
 - serversettings_admin_role.yaml
 - serversettings_editor_role.yaml
 - serversettings_viewer_role.yaml
+- technitiumcluster_admin_role.yaml
+- technitiumcluster_editor_role.yaml
+- technitiumcluster_viewer_role.yaml
 - zone_admin_role.yaml
 - zone_editor_role.yaml
 - zone_viewer_role.yaml
