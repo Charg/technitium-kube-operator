@@ -4,7 +4,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: zones.dns.packet.fail
+  name: dnssecs.dns.packet.fail
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
     {{- if .Values.crds.keep }}
@@ -15,18 +15,18 @@ metadata:
 spec:
   group: dns.packet.fail
   names:
-    kind: Zone
-    listKind: ZoneList
-    plural: zones
-    singular: zone
-  scope: Cluster
+    kind: DNSSEC
+    listKind: DNSSECList
+    plural: dnssecs
+    singular: dnssec
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.zoneName
+    - jsonPath: .spec.zone
       name: Zone
       type: string
-    - jsonPath: .spec.type
-      name: Type
+    - jsonPath: .spec.algorithm
+      name: Algorithm
       type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
@@ -38,12 +38,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Zone is the Schema for the zones API.
+          DNSSEC is the Schema for the dnssecs API.
 
-          Zone is cluster-scoped: a Technitium server exposes one global zone namespace,
-          so a zoneName must be unique across the whole cluster rather than per
-          Kubernetes namespace. This avoids two namespaces silently declaring conflicting
-          state for the same zone on a single server.
+          DNSSEC is namespaced, matching Record and Blocklist: it configures a zone on
+          a referenced TechnitiumCluster by name and lives in whichever namespace owns
+          the configuration, independent of Zone's cluster-scoped zone namespace.
         properties:
           apiVersion:
             description: |-
@@ -63,95 +62,80 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Zone
+            description: spec defines the desired state of DNSSEC
             properties:
-              catalog:
+              algorithm:
+                description: algorithm is the signing key algorithm.
+                enum:
+                - RSA
+                - ECDSA
+                type: string
+              curve:
                 description: |-
-                  catalog is the name of an existing catalog zone that this zone joins as a
-                  member. Applies to Primary, Secondary, Stub, and Forwarder zones.
+                  curve is the elliptic curve backing the ECDSA signing keys. Only
+                  meaningful when algorithm is ECDSA; the webhook rejects it set alongside
+                  RSA.
+                enum:
+                - P256
+                - P384
                 type: string
               deletionPolicy:
                 default: Delete
                 description: |-
-                  deletionPolicy controls what happens to the server-side zone when this
-                  resource is deleted. "Delete" (the default) removes the zone from the
-                  Technitium server. "Orphan" leaves the server zone intact and only clears
+                  deletionPolicy controls what happens to the zone's signed state when
+                  this resource is deleted. "Delete" (the default) unsigns the zone on
+                  the Technitium server. "Orphan" leaves the zone signed and only clears
                   the finalizer, which is useful for safe adoption or migration.
                 enum:
                 - Delete
                 - Orphan
                 type: string
-              dnssecValidation:
+              dnsKeyTtl:
                 description: |-
-                  dnssecValidation enables DNSSEC validation of responses from the upstream
-                  resolver of a Forwarder zone. Meaningful only for type Forwarder.
-                type: boolean
-              forwarder:
+                  dnsKeyTtl is the TTL, in seconds, of the zone's DNSKEY records. Left
+                  unchanged on the server when unset.
+                format: int32
+                type: integer
+              hashAlgorithm:
                 description: |-
-                  forwarder is the address (IP or hostname) of the upstream resolver used
-                  by a Forwarder zone. The special value "this-server" forwards to the
-                  local DNS server. Ignored by other zone types.
-                type: string
-              forwarderProtocol:
-                description: |-
-                  forwarderProtocol is the transport used to reach the forwarder of a
-                  Forwarder zone. Defaults to Udp on the server when unset. Ignored by
-                  other zone types.
+                  hashAlgorithm is the hash function backing the RSA signing keys. Only
+                  meaningful when algorithm is RSA; the webhook rejects it set alongside
+                  ECDSA.
                 enum:
-                - Udp
-                - Tcp
-                - Tls
-                - Https
-                - Quic
+                - SHA256
+                - SHA384
+                - SHA512
                 type: string
-              forwarderProxy:
+              kskKeySize:
                 description: |-
-                  forwarderProxy routes a Forwarder zone's upstream queries through a proxy.
-                  Meaningful only for type Forwarder.
-                properties:
-                  address:
-                    description: |-
-                      address is the proxy server's hostname or IP address. Required for Http
-                      and Socks5.
-                    type: string
-                  password:
-                    description: |-
-                      password authenticates to the proxy server, when it requires it. Technitium
-                      does not return this value from /api/zones/options/get, so the controller
-                      can only set it at zone creation and cannot detect or correct drift on it.
-                    type: string
-                  port:
-                    description: port is the proxy server's port. Required for Http
-                      and Socks5.
-                    format: int32
-                    type: integer
-                  type:
-                    description: |-
-                      type selects the proxy protocol. NoProxy disables proxying even when the
-                      other fields are set.
-                    enum:
-                    - NoProxy
-                    - Http
-                    - Socks5
-                    type: string
-                  username:
-                    description: username authenticates to the proxy server, when
-                      it requires it.
-                    type: string
-                required:
-                - type
-                type: object
-              primaryNameServerAddresses:
+                  kskKeySize is the Key Signing Key size, in bits, for RSA. Only
+                  meaningful when algorithm is RSA; the webhook rejects it set alongside
+                  ECDSA.
+                format: int32
+                type: integer
+              nsec3Iterations:
                 description: |-
-                  primaryNameServerAddresses lists the IP addresses or hostnames of the
-                  primary name server. Used by Secondary and Stub zones to locate the
-                  upstream primary; ignored by other zone types.
-                items:
-                  type: string
-                type: array
+                  nsec3Iterations is the NSEC3 hash iteration count. Only meaningful when
+                  nsecType is NSEC3.
+                format: int32
+                type: integer
+              nsec3SaltLength:
+                description: |-
+                  nsec3SaltLength is the NSEC3 salt length, in bytes. Only meaningful when
+                  nsecType is NSEC3.
+                format: int32
+                type: integer
+              nsecType:
+                default: NSEC
+                description: nsecType is the proof-of-nonexistence mechanism the signed
+                  zone uses.
+                enum:
+                - NSEC
+                - NSEC3
+                type: string
               serverRef:
                 description: |-
-                  serverRef names the TechnitiumCluster this zone is created on. The
+                  serverRef names the TechnitiumCluster the zone to sign lives on. The
                   referenced instance must be Ready. Only name is used: a TechnitiumCluster
                   is cluster-scoped, so the webhook rejects serverRef.namespace if set.
                 properties:
@@ -167,44 +151,49 @@ spec:
                 required:
                 - name
                 type: object
-              type:
-                default: Primary
-                description: type is the category of zone to create on the Technitium
-                  server.
-                enum:
-                - Primary
-                - Secondary
-                - Stub
-                - Forwarder
-                - Catalog
-                type: string
-              zoneName:
+              zone:
                 description: |-
-                  zoneName is the fully qualified DNS name of the zone, for example
-                  "example.com". It is required and immutable: change the name by deleting
-                  and recreating the resource, since renaming a live zone on the server is
-                  not a safe in-place operation.
+                  zone is the name of the existing authoritative zone to sign, for example
+                  "example.com". It is required and immutable: re-pointing a DNSSEC
+                  resource at a different zone is not a safe in-place operation, since it
+                  would unsign one zone and sign another under a single resource identity.
+                  Delete and recreate the resource to target a different zone.
                 maxLength: 253
-                pattern: ^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$
+                minLength: 1
                 type: string
                 x-kubernetes-validations:
-                - message: zoneName is immutable
+                - message: zone is immutable
                   rule: self == oldSelf
+              zskKeySize:
+                description: |-
+                  zskKeySize is the Zone Signing Key size, in bits, for RSA. Only
+                  meaningful when algorithm is RSA; the webhook rejects it set alongside
+                  ECDSA.
+                format: int32
+                type: integer
+              zskRolloverDays:
+                description: |-
+                  zskRolloverDays is how often, in days, the server automatically rolls
+                  the Zone Signing Key over. Zero disables automatic rollover. Left
+                  unchanged on the server when unset.
+                format: int32
+                type: integer
             required:
+            - algorithm
             - serverRef
-            - zoneName
+            - zone
             type: object
           status:
-            description: status defines the observed state of Zone
+            description: status defines the observed state of DNSSEC
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the Zone resource.
+                  conditions represent the current state of the DNSSEC resource.
                   Each condition has a unique type and reflects the status of a specific aspect of the resource.
 
                   Condition types set by the controller:
-                  - "Ready": the zone exists on the server and matches the spec
-                  - "Progressing": the controller is creating or updating the zone
+                  - "Ready": the zone is signed and matches the spec's nsecType
+                  - "Progressing": the controller is signing the zone
                   - "Degraded": a reconcile failed, with the cause in reason/message
 
                   The status of each condition is one of True, False, or Unknown.
@@ -273,10 +262,10 @@ spec:
                   is stale.
                 format: int64
                 type: integer
-              zoneCreated:
+              signed:
                 description: |-
-                  zoneCreated reports whether the zone currently exists on the Technitium
-                  server.
+                  signed reports whether the zone currently carries any DNSSEC signature
+                  (NSEC or NSEC3), as last observed on the Technitium server.
                 type: boolean
             type: object
         required:

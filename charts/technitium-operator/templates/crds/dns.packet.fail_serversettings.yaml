@@ -4,7 +4,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: zones.dns.packet.fail
+  name: serversettings.dns.packet.fail
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
     {{- if .Values.crds.keep }}
@@ -15,18 +15,15 @@ metadata:
 spec:
   group: dns.packet.fail
   names:
-    kind: Zone
-    listKind: ZoneList
-    plural: zones
-    singular: zone
-  scope: Cluster
+    kind: ServerSettings
+    listKind: ServerSettingsList
+    plural: serversettings
+    singular: serversettings
+  scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.zoneName
-      name: Zone
-      type: string
-    - jsonPath: .spec.type
-      name: Type
+    - jsonPath: .spec.serverRef.name
+      name: Server
       type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
@@ -38,12 +35,11 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Zone is the Schema for the zones API.
+          ServerSettings is the Schema for the serversettings API.
 
-          Zone is cluster-scoped: a Technitium server exposes one global zone namespace,
-          so a zoneName must be unique across the whole cluster rather than per
-          Kubernetes namespace. This avoids two namespaces silently declaring conflicting
-          state for the same zone on a single server.
+          ServerSettings is namespaced, matching Record: it configures a referenced
+          TechnitiumCluster by name and lives in whichever namespace owns the
+          configuration, rather than contending for a single cluster-scoped name.
         properties:
           apiVersion:
             description: |-
@@ -63,95 +59,116 @@ spec:
           metadata:
             type: object
           spec:
-            description: spec defines the desired state of Zone
+            description: spec defines the desired state of ServerSettings
             properties:
-              catalog:
-                description: |-
-                  catalog is the name of an existing catalog zone that this zone joins as a
-                  member. Applies to Primary, Secondary, Stub, and Forwarder zones.
-                type: string
-              deletionPolicy:
-                default: Delete
-                description: |-
-                  deletionPolicy controls what happens to the server-side zone when this
-                  resource is deleted. "Delete" (the default) removes the zone from the
-                  Technitium server. "Orphan" leaves the server zone intact and only clears
-                  the finalizer, which is useful for safe adoption or migration.
-                enum:
-                - Delete
-                - Orphan
-                type: string
-              dnssecValidation:
-                description: |-
-                  dnssecValidation enables DNSSEC validation of responses from the upstream
-                  resolver of a Forwarder zone. Meaningful only for type Forwarder.
-                type: boolean
-              forwarder:
-                description: |-
-                  forwarder is the address (IP or hostname) of the upstream resolver used
-                  by a Forwarder zone. The special value "this-server" forwards to the
-                  local DNS server. Ignored by other zone types.
-                type: string
-              forwarderProtocol:
-                description: |-
-                  forwarderProtocol is the transport used to reach the forwarder of a
-                  Forwarder zone. Defaults to Udp on the server when unset. Ignored by
-                  other zone types.
-                enum:
-                - Udp
-                - Tcp
-                - Tls
-                - Https
-                - Quic
-                type: string
-              forwarderProxy:
-                description: |-
-                  forwarderProxy routes a Forwarder zone's upstream queries through a proxy.
-                  Meaningful only for type Forwarder.
+              cache:
+                description: cache configures the resolver cache.
                 properties:
-                  address:
-                    description: |-
-                      address is the proxy server's hostname or IP address. Required for Http
-                      and Socks5.
-                    type: string
-                  password:
-                    description: |-
-                      password authenticates to the proxy server, when it requires it. Technitium
-                      does not return this value from /api/zones/options/get, so the controller
-                      can only set it at zone creation and cannot detect or correct drift on it.
-                    type: string
-                  port:
-                    description: port is the proxy server's port. Required for Http
-                      and Socks5.
+                  maximumRecordTtlSeconds:
+                    description: maximumRecordTtlSeconds caps the TTL a cached record
+                      may have.
                     format: int32
+                    minimum: 0
                     type: integer
-                  type:
+                  minimumRecordTtlSeconds:
+                    description: minimumRecordTtlSeconds floors the TTL a cached record
+                      may have.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  serveStale:
                     description: |-
-                      type selects the proxy protocol. NoProxy disables proxying even when the
-                      other fields are set.
+                      serveStale enables serving expired records from cache when upstreams are
+                      unreachable.
+                    type: boolean
+                  serveStaleTtlSeconds:
+                    description: |-
+                      serveStaleTtlSeconds is how long, in seconds, an expired record is kept
+                      usable for stale answers before it is dropped from cache.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  deletionPolicy controls what happens to the applied settings when this
+                  resource is deleted. Defaults to Retain, which leaves them in place.
+                enum:
+                - Retain
+                type: string
+              forwarders:
+                description: forwarders configures upstream query forwarding.
+                properties:
+                  addresses:
+                    description: |-
+                      addresses is the list of upstream resolvers to forward to, for example
+                      ["1.1.1.1", "8.8.8.8"]. An empty list clears all forwarders, returning
+                      the server to performing its own recursive resolution.
+                    items:
+                      type: string
+                    type: array
+                  protocol:
+                    description: |-
+                      protocol is the transport used to reach the forwarders. Left unchanged on
+                      the server when unset.
                     enum:
-                    - NoProxy
-                    - Http
-                    - Socks5
+                    - Udp
+                    - Tcp
+                    - Tls
+                    - Https
+                    - Quic
                     type: string
-                  username:
-                    description: username authenticates to the proxy server, when
-                      it requires it.
+                type: object
+              logging:
+                description: logging configures query and file logging.
+                properties:
+                  enabled:
+                    description: enabled turns file logging of error and audit entries
+                      on or off.
+                    type: boolean
+                  logQueries:
+                    description: |-
+                      logQueries logs every query and its response. This is verbose and
+                      off by default on the server.
+                    type: boolean
+                  maxFileDays:
+                    description: |-
+                      maxFileDays is how many days of log files to keep. 0 disables automatic
+                      deletion.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  useLocalTime:
+                    description: useLocalTime writes log timestamps in local time
+                      instead of UTC.
+                    type: boolean
+                type: object
+              recursion:
+                description: recursion configures the recursion policy.
+                properties:
+                  networkACL:
+                    description: |-
+                      networkACL is the ordered access control list of IP or network addresses
+                      used only when policy is UseSpecifiedNetworkACL. Prefix an entry with "!"
+                      to deny it. An empty list clears the ACL.
+                    items:
+                      type: string
+                    type: array
+                  policy:
+                    description: policy sets which clients recursion is allowed for.
+                    enum:
+                    - Deny
+                    - Allow
+                    - AllowOnlyForPrivateNetworks
+                    - UseSpecifiedNetworkACL
                     type: string
                 required:
-                - type
+                - policy
                 type: object
-              primaryNameServerAddresses:
-                description: |-
-                  primaryNameServerAddresses lists the IP addresses or hostnames of the
-                  primary name server. Used by Secondary and Stub zones to locate the
-                  upstream primary; ignored by other zone types.
-                items:
-                  type: string
-                type: array
               serverRef:
                 description: |-
-                  serverRef names the TechnitiumCluster this zone is created on. The
+                  serverRef names the TechnitiumCluster these settings are applied to. The
                   referenced instance must be Ready. Only name is used: a TechnitiumCluster
                   is cluster-scoped, so the webhook rejects serverRef.namespace if set.
                 properties:
@@ -167,47 +184,20 @@ spec:
                 required:
                 - name
                 type: object
-              type:
-                default: Primary
-                description: type is the category of zone to create on the Technitium
-                  server.
-                enum:
-                - Primary
-                - Secondary
-                - Stub
-                - Forwarder
-                - Catalog
-                type: string
-              zoneName:
-                description: |-
-                  zoneName is the fully qualified DNS name of the zone, for example
-                  "example.com". It is required and immutable: change the name by deleting
-                  and recreating the resource, since renaming a live zone on the server is
-                  not a safe in-place operation.
-                maxLength: 253
-                pattern: ^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$
-                type: string
-                x-kubernetes-validations:
-                - message: zoneName is immutable
-                  rule: self == oldSelf
             required:
             - serverRef
-            - zoneName
             type: object
           status:
-            description: status defines the observed state of Zone
+            description: status defines the observed state of ServerSettings
             properties:
               conditions:
                 description: |-
-                  conditions represent the current state of the Zone resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
+                  conditions represent the current state of the ServerSettings resource.
 
                   Condition types set by the controller:
-                  - "Ready": the zone exists on the server and matches the spec
-                  - "Progressing": the controller is creating or updating the zone
+                  - "Ready": the settings have been applied and match the spec
+                  - "Progressing": the controller is applying the settings
                   - "Degraded": a reconcile failed, with the cause in reason/message
-
-                  The status of each condition is one of True, False, or Unknown.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -266,18 +256,50 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              observed:
+                description: |-
+                  observed reflects the managed settings as the server reported them on the
+                  last successful reconcile.
+                properties:
+                  cacheMaximumRecordTtlSeconds:
+                    format: int32
+                    type: integer
+                  cacheMinimumRecordTtlSeconds:
+                    format: int32
+                    type: integer
+                  forwarderProtocol:
+                    type: string
+                  forwarders:
+                    items:
+                      type: string
+                    type: array
+                  logQueries:
+                    type: boolean
+                  loggingEnabled:
+                    type: boolean
+                  maxLogFileDays:
+                    format: int32
+                    type: integer
+                  recursion:
+                    type: string
+                  recursionNetworkACL:
+                    items:
+                      type: string
+                    type: array
+                  serveStale:
+                    type: boolean
+                  serveStaleTtlSeconds:
+                    format: int32
+                    type: integer
+                  useLocalTime:
+                    type: boolean
+                type: object
               observedGeneration:
                 description: |-
                   observedGeneration is the .metadata.generation the controller last
-                  reconciled. A value behind .metadata.generation means the observed state
-                  is stale.
+                  reconciled.
                 format: int64
                 type: integer
-              zoneCreated:
-                description: |-
-                  zoneCreated reports whether the zone currently exists on the Technitium
-                  server.
-                type: boolean
             type: object
         required:
         - spec

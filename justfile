@@ -39,6 +39,22 @@ default:
 [group('Development')]
 manifests: controller-gen
     "{{ controller_gen }}" rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+    @just helm-sync
+
+# Regenerate the Helm chart's CRD, RBAC and webhook templates from config/
+[group('Development')]
+helm-sync:
+    go run ./hack/chartgen
+
+# Lint the Helm chart and check the rendered chart matches config/
+[group('Development')]
+helm-verify:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    helm lint charts/technitium-operator
+    helm lint charts/technitium-operator --set webhook.enabled=true,networkPolicy.enabled=true,metrics.serviceMonitor.enabled=true
+    helm template verify charts/technitium-operator --namespace verify --set webhook.enabled=true \
+        | go run ./hack/chartgen -check-rendered
 
 # Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations
 [group('Development')]

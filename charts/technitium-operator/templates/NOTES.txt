@@ -6,17 +6,14 @@ Check the controller manager status with:
 
 {{- if .Values.crds.install }}
 
-The Zone CRD (zones.dns.packet.fail) has been installed. Create a Zone with:
+The operator's CRDs (*.dns.packet.fail) have been installed. List them with:
 
-  kubectl apply -f - <<EOF
-  apiVersion: dns.packet.fail/v1alpha1
-  kind: Zone
-  metadata:
-    name: zone-sample
-  spec: {}
-  EOF
+  kubectl get crd -o name | grep '\.dns\.packet\.fail$'
+
+Start by creating a TechnitiumCluster, then Zones and Records that reference it.
+Examples: https://github.com/charg/technitium-operator/tree/main/config/samples
 {{- else }}
 
-CRD installation was disabled (crds.install=false). Make sure the
-zones.dns.packet.fail CRD is installed separately before creating Zone resources.
+CRD installation was disabled (crds.install=false). Make sure the operator's
+*.dns.packet.fail CRDs are installed separately before creating resources.
 {{- end }}
