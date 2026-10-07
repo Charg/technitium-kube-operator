@@ -80,5 +80,13 @@
       datasourceTemplate: "github-releases",
       depNameTemplate: "golangci/golangci-lint",
     },
+    {
+      // Must match golangci_lint_version in the justfile; same depName keeps both in one PR.
+      customType: "regex",
+      managerFilePatterns: ["/^\\.custom-gcl\\.yml$/"],
+      matchStrings: ["version: (?<currentValue>v\\S+)"],
+      datasourceTemplate: "github-releases",
+      depNameTemplate: "golangci/golangci-lint",
+    },
   ],
 }
