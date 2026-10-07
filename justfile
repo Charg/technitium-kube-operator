@@ -15,7 +15,7 @@ kind := env_var_or_default("KIND", "kind")
 # Where local tool binaries are installed
 localbin := justfile_directory() / "bin"
 
-kustomize_version := "v5.8.1"
+kustomize_version := "v5.8.2"
 controller_tools_version := "v0.22.0"
 golangci_lint_version := "v2.14.0"
 
