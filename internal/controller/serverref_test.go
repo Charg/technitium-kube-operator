@@ -18,7 +18,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
@@ -70,14 +69,15 @@ var _ = Describe("serverClientCache", func() {
 		adminSecretID = client.ObjectKey{Namespace: namespace, Name: adminSecretName(clusterName)}
 
 		Expect(k8sClient.Create(ctx, &dnsv1alpha1.TechnitiumCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: clusterName},
+			Name: clusterName,
 			Spec: dnsv1alpha1.TechnitiumClusterSpec{
 				Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: resource.MustParse("1Gi")},
 			},
 		})).To(Succeed())
 		Expect(k8sClient.Create(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: adminSecretID.Namespace, Name: adminSecretID.Name},
-			Data:       map[string][]byte{adminSecretTokenKey: []byte("token-1")},
+			Namespace: adminSecretID.Namespace,
+			Name:      adminSecretID.Name,
+			Data:      map[string][]byte{adminSecretTokenKey: []byte("token-1")},
 		})).To(Succeed())
 	})
 
@@ -85,10 +85,11 @@ var _ = Describe("serverClientCache", func() {
 		primary.Close()
 		balanced.Close()
 		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Namespace: adminSecretID.Namespace, Name: adminSecretID.Name},
+			Namespace: adminSecretID.Namespace,
+			Name:      adminSecretID.Name,
 		}))).To(Succeed())
 		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &dnsv1alpha1.TechnitiumCluster{
-			ObjectMeta: metav1.ObjectMeta{Name: clusterName},
+			Name: clusterName,
 		}))).To(Succeed())
 	})
 
