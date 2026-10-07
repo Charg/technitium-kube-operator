@@ -146,6 +146,8 @@ kubebuilder create webhook \
 ```bash
 just test              # Run unit tests (uses envtest: real K8s API + etcd)
 just run               # Run locally (uses current kubeconfig context)
+just lint              # Run golangci-lint exactly as CI does
+just install-hooks     # Install prek hooks (.pre-commit-config.yaml): lint on commit
 ```
 
 Tests use **Ginkgo + Gomega** (BDD style). Check `suite_test.go` for setup.

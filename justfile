@@ -23,6 +23,8 @@ kustomize := localbin / "kustomize"
 controller_gen := localbin / "controller-gen"
 envtest := localbin / "setup-envtest"
 golangci_lint := localbin / "golangci-lint"
+# golangci-lint rebuilt with the plugins in .custom-gcl.yml; the lint recipes run this one.
+golangci_lint_custom := localbin / "golangci-lint-custom"
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -114,17 +116,22 @@ cleanup-test-e2e:
 # Run golangci-lint
 [group('Development')]
 lint: golangci-lint
-    "{{ golangci_lint }}" run
+    "{{ golangci_lint_custom }}" run
 
 # Run golangci-lint and apply fixes
 [group('Development')]
 lint-fix: golangci-lint
-    "{{ golangci_lint }}" run --fix
+    "{{ golangci_lint_custom }}" run --fix
 
 # Verify golangci-lint configuration
 [group('Development')]
 lint-config: golangci-lint
-    "{{ golangci_lint }}" config verify
+    "{{ golangci_lint_custom }}" config verify
+
+# Install the prek git hooks from .pre-commit-config.yaml (opt-in, per clone)
+[group('Development')]
+install-hooks:
+    prek install
 
 ##
 ## Build
@@ -273,11 +280,25 @@ golangci-lint:
     #!/usr/bin/env bash
     set -euo pipefail
     just _install-tool golangci-lint {{ golangci_lint_version }} github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-    if [ -f .custom-gcl.yml ]; then
-        echo "Building custom golangci-lint with plugins..."
-        "{{ golangci_lint }}" custom --destination "{{ localbin }}" --name golangci-lint-custom
-        mv -f "{{ localbin }}/golangci-lint-custom" "{{ golangci_lint }}"
+    if [ ! -f .custom-gcl.yml ]; then
+        ln -sf "$(realpath "{{ golangci_lint }}")" "{{ golangci_lint_custom }}"
+        exit 0
     fi
+    if ! grep -qx 'version: {{ golangci_lint_version }}' .custom-gcl.yml; then
+        echo "error: .custom-gcl.yml version must match golangci_lint_version ({{ golangci_lint_version }})" >&2
+        exit 1
+    fi
+    custom="{{ golangci_lint_custom }}-{{ golangci_lint_version }}"
+    # Rebuild only when the plugin config changes, so a lint run stays fast.
+    if [ ! -f "${custom}" ] || [ .custom-gcl.yml -nt "${custom}" ]; then
+        echo "Building custom golangci-lint with plugins..."
+        # custom builds in a temp dir outside this module, where GOTOOLCHAIN=auto
+        # falls back to the system Go and the result refuses to lint this module.
+        # Pin it to the toolchain this module selects.
+        GOTOOLCHAIN="$(go env GOVERSION)" "{{ golangci_lint }}" custom \
+            --destination "{{ localbin }}" --name "$(basename "${custom}")"
+    fi
+    ln -sf "$(realpath "${custom}")" "{{ golangci_lint_custom }}"
 
 # Print ENVTEST_VERSION and ENVTEST_K8S_VERSION derived from go.mod
 _envtest-versions:

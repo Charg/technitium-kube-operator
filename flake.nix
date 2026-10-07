@@ -14,7 +14,7 @@
       {
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            go
+            go_1_27
             gotools
             golangci-lint
             jq
@@ -23,6 +23,7 @@
             kustomize
             kubectl
             kind
+            prek
             docker-client
           ];
 
