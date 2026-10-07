@@ -9,11 +9,8 @@ package controller
 
 import (
 	"context"
-	"fmt"
 	"reflect"
-	"sync"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -23,7 +20,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
-	"github.com/charg/technitium-operator/internal/config"
 	"github.com/charg/technitium-operator/internal/technitium"
 )
 
@@ -43,16 +39,6 @@ type ServerSettingsAPI interface {
 	SetDNSSettings(ctx context.Context, opts technitium.SetDNSSettingsOptions) error
 }
 
-// cachedServerSettingsClient is one entry in ServerSettingsReconciler's client
-// cache: a built ServerSettingsAPI plus the resourceVersion of the admin
-// Secret it was built from. Kept separate from Record's and Zone's caches
-// (same shape, different element type) rather than sharing a generic cache,
-// so this CRD's controller stays independent of theirs.
-type cachedServerSettingsClient struct {
-	secretResourceVersion string
-	api                   ServerSettingsAPI
-}
-
 // ServerSettingsReconciler reconciles a ServerSettings object.
 type ServerSettingsReconciler struct {
 	client.Client
@@ -64,17 +50,12 @@ type ServerSettingsReconciler struct {
 	// NewServerClient resolves a ServerSettings' serverRef to a client for
 	// that managed instance. It is a seam so tests inject a fake; production
 	// leaves it nil and defaultServerClient resolves the TechnitiumCluster
-	// endpoint + admin Secret and builds a real client.
+	// primary endpoint + admin Secret and builds a real client.
 	NewServerClient func(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (ServerSettingsAPI, error)
 
-	// clientCacheMu guards clientCache. Reconcile runs are not necessarily
-	// serialized (controller-runtime workers), so the cache needs its own
-	// lock rather than relying on the caller.
-	clientCacheMu sync.Mutex
-	// clientCache holds one built client per TechnitiumCluster name, so a
-	// routine drift reconcile reuses the existing client instead of
-	// re-reading the Secret and reconstructing it every time.
-	clientCache map[string]cachedServerSettingsClient
+	// clients resolves serverRef to a client for the cluster's Primary,
+	// caching one per TechnitiumCluster.
+	clients serverClientCache
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=serversettings,verbs=get;list;watch;create;update;patch;delete
@@ -135,86 +116,14 @@ func (r *ServerSettingsReconciler) serverClientFor(ctx context.Context, serverRe
 	return r.defaultServerClient(ctx, serverRef)
 }
 
-// defaultServerClient resolves a TechnitiumCluster's endpoint and admin
-// Secret and builds a real Technitium client for it, caching the result by
-// the Secret's resourceVersion so a routine reconcile does not re-login on
-// every pass. This mirrors RecordReconciler.defaultServerClient; see
-// cachedServerSettingsClient for why the cache itself is not shared.
+// defaultServerClient resolves the TechnitiumCluster's Primary via the shared
+// serverClientCache, so a routine reconcile does not re-login on every pass.
 func (r *ServerSettingsReconciler) defaultServerClient(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (ServerSettingsAPI, error) {
-	var tc dnsv1alpha1.TechnitiumCluster
-	if err := r.Get(ctx, client.ObjectKey{Name: serverRef.Name}, &tc); err != nil {
-		// Wrapped rather than replaced so apierrors.IsNotFound still recognizes
-		// it, matching how Record and Zone tell "server is gone" apart from
-		// any other resolve failure.
-		return nil, fmt.Errorf("getting TechnitiumCluster %q: %w", serverRef.Name, err)
-	}
-
-	if tc.Status.Endpoint == "" {
-		return nil, fmt.Errorf("TechnitiumCluster %q is not ready yet: no endpoint reported", serverRef.Name)
-	}
-
-	secretNamespace := r.OperatorNamespace
-	secretName := adminSecretName(tc.Name)
-	if tc.Spec.AdminSecretRef != nil {
-		secretName = tc.Spec.AdminSecretRef.Name
-		if tc.Spec.AdminSecretRef.Namespace != "" {
-			secretNamespace = tc.Spec.AdminSecretRef.Namespace
-		}
-	}
-	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
-
-	var secret corev1.Secret
-	if err := r.Get(ctx, secretKey, &secret); err != nil {
-		return nil, fmt.Errorf("getting admin secret %s for TechnitiumCluster %q: %w", secretKey, serverRef.Name, err)
-	}
-
-	if len(secret.Data[adminSecretTokenKey]) == 0 {
-		return nil, fmt.Errorf("TechnitiumCluster %q is not bootstrapped yet: admin secret %s has no token",
-			serverRef.Name, secretKey)
-	}
-
-	if cached, ok := r.cachedClient(tc.Name, secret.ResourceVersion); ok {
-		return cached, nil
-	}
-
-	opts, err := config.ClientOptionsFromSecret(&secret)
+	api, err := r.clients.resolve(ctx, r.Client, r.OperatorNamespace, serverRef)
 	if err != nil {
 		return nil, err
 	}
-
-	api, err := technitium.NewClient(tc.Status.Endpoint, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("building Technitium client for %q: %w", serverRef.Name, err)
-	}
-
-	r.cacheClient(tc.Name, secret.ResourceVersion, api)
 	return api, nil
-}
-
-// cachedClient returns the cached client for clusterName when its Secret
-// resourceVersion still matches, so the caller knows the credentials have not
-// rotated since the client was built.
-func (r *ServerSettingsReconciler) cachedClient(clusterName, secretResourceVersion string) (ServerSettingsAPI, bool) {
-	r.clientCacheMu.Lock()
-	defer r.clientCacheMu.Unlock()
-
-	entry, ok := r.clientCache[clusterName]
-	if !ok || entry.secretResourceVersion != secretResourceVersion {
-		return nil, false
-	}
-	return entry.api, true
-}
-
-// cacheClient stores a freshly built client under clusterName, keyed for
-// invalidation by the admin Secret's resourceVersion at build time.
-func (r *ServerSettingsReconciler) cacheClient(clusterName, secretResourceVersion string, api ServerSettingsAPI) {
-	r.clientCacheMu.Lock()
-	defer r.clientCacheMu.Unlock()
-
-	if r.clientCache == nil {
-		r.clientCache = make(map[string]cachedServerSettingsClient)
-	}
-	r.clientCache[clusterName] = cachedServerSettingsClient{secretResourceVersion: secretResourceVersion, api: api}
 }
 
 // finalizeServerSettings clears the finalizer without touching the server.

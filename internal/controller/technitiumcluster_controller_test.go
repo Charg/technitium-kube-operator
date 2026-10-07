@@ -219,7 +219,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(string(secret.Data["password"])).To(Equal(originalPassword))
 		})
 
-		It("sets status.endpoint and phase Provisioning while no replicas are ready", func() {
+		It("sets status.endpoint, status.primaryEndpoint and phase Provisioning while no replicas are ready", func() {
 			createClusterCR(nil)
 			r := newReconciler()
 			result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
@@ -229,6 +229,8 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			var cr dnsv1alpha1.TechnitiumCluster
 			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
 			Expect(cr.Status.Endpoint).To(Equal(fmt.Sprintf("http://%s.%s.svc:5380", resourceName, namespace)))
+			Expect(cr.Status.PrimaryEndpoint).To(Equal(
+				fmt.Sprintf("http://%s-0.%s-headless.%s.svc:5380", resourceName, resourceName, namespace)))
 			// envtest has no kubelet, so the StatefulSet's pods never report
 			// ready; readyReplicas stays at zero and the phase stays
 			// Provisioning rather than advancing to Bootstrapping.

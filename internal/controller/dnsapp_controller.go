@@ -11,9 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,7 +22,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
-	"github.com/charg/technitium-operator/internal/config"
 	"github.com/charg/technitium-operator/internal/technitium"
 )
 
@@ -45,15 +42,6 @@ type DNSAppAPI interface {
 	SetAppConfig(ctx context.Context, name, appConfig string) error
 }
 
-// cachedDNSAppClient is one entry in DNSAppReconciler's client cache: a built
-// DNSAppAPI plus the resourceVersion of the admin Secret it was built from.
-// Kept separate from the other CRDs' caches (same shape, different element
-// type) so this CRD's controller stays independent of theirs.
-type cachedDNSAppClient struct {
-	secretResourceVersion string
-	api                   DNSAppAPI
-}
-
 // DNSAppReconciler reconciles a DNSApp object.
 type DNSAppReconciler struct {
 	client.Client
@@ -64,18 +52,13 @@ type DNSAppReconciler struct {
 	OperatorNamespace string
 	// NewServerClient resolves a DNSApp's serverRef to a client for that
 	// managed instance. It is a seam so tests inject a fake; production leaves
-	// it nil and defaultServerClient resolves the TechnitiumCluster endpoint +
-	// admin Secret and builds a real client.
+	// it nil and defaultServerClient resolves the TechnitiumCluster primary
+	// endpoint + admin Secret and builds a real client.
 	NewServerClient func(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (DNSAppAPI, error)
 
-	// clientCacheMu guards clientCache. Reconcile runs are not necessarily
-	// serialized (controller-runtime workers), so the cache needs its own
-	// lock rather than relying on the caller.
-	clientCacheMu sync.Mutex
-	// clientCache holds one built client per TechnitiumCluster name, so a
-	// routine drift reconcile reuses the existing client instead of
-	// re-reading the Secret and reconstructing it every time.
-	clientCache map[string]cachedDNSAppClient
+	// clients resolves serverRef to a client for the cluster's Primary,
+	// caching one per TechnitiumCluster.
+	clients serverClientCache
 }
 
 // +kubebuilder:rbac:groups=dns.packet.fail,resources=dnsapps,verbs=get;list;watch;create;update;patch;delete
@@ -136,86 +119,14 @@ func (r *DNSAppReconciler) serverClientFor(ctx context.Context, serverRef dnsv1a
 	return r.defaultServerClient(ctx, serverRef)
 }
 
-// defaultServerClient resolves a TechnitiumCluster's endpoint and admin
-// Secret and builds a real Technitium client for it, caching the result by
-// the Secret's resourceVersion so a routine reconcile does not re-login on
-// every pass. This mirrors RecordReconciler.defaultServerClient; see
-// cachedDNSAppClient for why the cache itself is not shared.
+// defaultServerClient resolves the TechnitiumCluster's Primary via the shared
+// serverClientCache, so a routine reconcile does not re-login on every pass.
 func (r *DNSAppReconciler) defaultServerClient(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (DNSAppAPI, error) {
-	var tc dnsv1alpha1.TechnitiumCluster
-	if err := r.Get(ctx, client.ObjectKey{Name: serverRef.Name}, &tc); err != nil {
-		// Wrapped rather than replaced so apierrors.IsNotFound still recognizes
-		// it, matching how Record and Blocklist tell "server is gone" apart from
-		// any other resolve failure.
-		return nil, fmt.Errorf("getting TechnitiumCluster %q: %w", serverRef.Name, err)
-	}
-
-	if tc.Status.Endpoint == "" {
-		return nil, fmt.Errorf("TechnitiumCluster %q is not ready yet: no endpoint reported", serverRef.Name)
-	}
-
-	secretNamespace := r.OperatorNamespace
-	secretName := adminSecretName(tc.Name)
-	if tc.Spec.AdminSecretRef != nil {
-		secretName = tc.Spec.AdminSecretRef.Name
-		if tc.Spec.AdminSecretRef.Namespace != "" {
-			secretNamespace = tc.Spec.AdminSecretRef.Namespace
-		}
-	}
-	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
-
-	var secret corev1.Secret
-	if err := r.Get(ctx, secretKey, &secret); err != nil {
-		return nil, fmt.Errorf("getting admin secret %s for TechnitiumCluster %q: %w", secretKey, serverRef.Name, err)
-	}
-
-	if len(secret.Data[adminSecretTokenKey]) == 0 {
-		return nil, fmt.Errorf("TechnitiumCluster %q is not bootstrapped yet: admin secret %s has no token",
-			serverRef.Name, secretKey)
-	}
-
-	if cached, ok := r.cachedClient(tc.Name, secret.ResourceVersion); ok {
-		return cached, nil
-	}
-
-	opts, err := config.ClientOptionsFromSecret(&secret)
+	api, err := r.clients.resolve(ctx, r.Client, r.OperatorNamespace, serverRef)
 	if err != nil {
 		return nil, err
 	}
-
-	api, err := technitium.NewClient(tc.Status.Endpoint, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("building Technitium client for %q: %w", serverRef.Name, err)
-	}
-
-	r.cacheClient(tc.Name, secret.ResourceVersion, api)
 	return api, nil
-}
-
-// cachedClient returns the cached client for clusterName when its Secret
-// resourceVersion still matches, so the caller knows the credentials have not
-// rotated since the client was built.
-func (r *DNSAppReconciler) cachedClient(clusterName, secretResourceVersion string) (DNSAppAPI, bool) {
-	r.clientCacheMu.Lock()
-	defer r.clientCacheMu.Unlock()
-
-	entry, ok := r.clientCache[clusterName]
-	if !ok || entry.secretResourceVersion != secretResourceVersion {
-		return nil, false
-	}
-	return entry.api, true
-}
-
-// cacheClient stores a freshly built client under clusterName, keyed for
-// invalidation by the admin Secret's resourceVersion at build time.
-func (r *DNSAppReconciler) cacheClient(clusterName, secretResourceVersion string, api DNSAppAPI) {
-	r.clientCacheMu.Lock()
-	defer r.clientCacheMu.Unlock()
-
-	if r.clientCache == nil {
-		r.clientCache = make(map[string]cachedDNSAppClient)
-	}
-	r.clientCache[clusterName] = cachedDNSAppClient{secretResourceVersion: secretResourceVersion, api: api}
 }
 
 // reconcileDNSApp brings the server's installed app, its version, and its

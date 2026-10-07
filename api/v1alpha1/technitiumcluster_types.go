@@ -250,10 +250,18 @@ type TechnitiumClusterStatus struct {
 	// +optional
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
-	// endpoint is the in-cluster API URL the operator and Zone resources use
-	// to reach this instance.
+	// endpoint is the in-cluster URL of the client Service, which
+	// load-balances across every replica.
 	// +optional
 	Endpoint string `json:"endpoint,omitempty"`
+
+	// primaryEndpoint is the API URL of the Primary node (ordinal 0), reached
+	// through the headless Service rather than the load-balanced client
+	// Service. Resources that write to this instance (Zone, Record,
+	// Blocklist and the rest) send their API calls here, so a write never
+	// lands on a Secondary.
+	// +optional
+	PrimaryEndpoint string `json:"primaryEndpoint,omitempty"`
 
 	// observedGeneration is the .metadata.generation the controller last
 	// reconciled. A value behind .metadata.generation means the observed state

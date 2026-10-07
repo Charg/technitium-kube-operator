@@ -247,8 +247,8 @@ func (r *TechnitiumClusterReconciler) nodeClientFactory() func(endpoint, usernam
 // nodeEndpoint is a single StatefulSet ordinal's own API address: the
 // headless Service governing the StatefulSet gives each pod a stable DNS name
 // of "<sts>-<ordinal>.<headless-service>", unlike the client Service's
-// endpoint (used for bootstrap and Zone reconciliation), which load-balances
-// across whichever pod happens to answer.
+// endpoint, which load-balances across whichever pod happens to answer.
+// Ordinal 0 is the Primary, so bootstrap and every serverRef write target it.
 func nodeEndpoint(clusterName string, ordinal int32, namespace string) string {
 	return fmt.Sprintf("http://%s-%d.%s.%s.svc:5380", clusterName, ordinal, headlessServiceName(clusterName), namespace)
 }
@@ -313,7 +313,10 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// reconcileClustering.
 	clustered := desiredReplicas <= 1
 	if readyReplicas >= desiredReplicas {
-		bootstrapped, err = r.ensureToken(ctx, &tc, endpoint)
+		// Mint the token on the Primary: the client Service would pick
+		// whichever pod answers, and every serverRef resolver talks to the
+		// Primary with it.
+		bootstrapped, err = r.ensureToken(ctx, &tc, nodeEndpoint(tc.Name, 0, r.OperatorNamespace))
 		if err != nil {
 			log.Error(err, "Failed to bootstrap TechnitiumCluster admin token", "cluster", tc.Name)
 			if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
@@ -1109,6 +1112,10 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 	changed := false
 	if tc.Status.Endpoint != endpoint {
 		tc.Status.Endpoint = endpoint
+		changed = true
+	}
+	if primaryEndpoint := nodeEndpoint(tc.Name, 0, r.OperatorNamespace); tc.Status.PrimaryEndpoint != primaryEndpoint {
+		tc.Status.PrimaryEndpoint = primaryEndpoint
 		changed = true
 	}
 	if tc.Status.ReadyReplicas != readyReplicas {
