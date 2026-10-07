@@ -5,7 +5,7 @@ A Kubernetes operator that manages Technitium DNS Server zones as custom resourc
 The operator provisions Technitium DNS Server instances (`TechnitiumCluster`, API group `dns.packet.fail/v1alpha1`) and reconciles `Zone` resources against them, keeping DNS zones declared in the cluster in sync with the server. Manage DNS state with kubectl and GitOps instead of the Technitium admin console.
 
 ## TechnitiumCluster resource
-A `TechnitiumCluster` provisions a Technitium DNS Server instance: a StatefulSet, a client Service, and (unless `spec.adminSecretRef` is set) a generated `<name>-admin` Secret holding its credentials. It is cluster-scoped, and its status reports `endpoint` once the instance is reachable.
+A `TechnitiumCluster` provisions a Technitium DNS Server instance: a StatefulSet, a client Service, and (unless `spec.adminSecretRef` is set) a generated `<name>-admin` Secret holding its credentials. It is cluster-scoped. Once the instance is reachable, its status reports `endpoint`, the client Service that load-balances across every replica, and `primaryEndpoint`, the Primary node (`<name>-0`) addressed through the headless Service. Every resource that writes to the instance (Zone, Record, Blocklist and the rest) sends its API calls to `primaryEndpoint`, so a write never lands on a Secondary.
 
 ```yaml
 apiVersion: dns.packet.fail/v1alpha1
@@ -44,7 +44,7 @@ spec:
 ```
 
 ## Zone resource
-A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zone namespace, so `zoneName` must be unique across the whole cluster rather than per Kubernetes namespace. Every `Zone` names the `TechnitiumCluster` it belongs to via `spec.serverRef.name`; the reconciler resolves that instance's endpoint and admin credentials on its own, so nothing further needs configuring.
+A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zone namespace, so `zoneName` must be unique across the whole cluster rather than per Kubernetes namespace. Every `Zone` names the `TechnitiumCluster` it belongs to via `spec.serverRef.name`; the reconciler resolves that instance's primary endpoint and admin credentials on its own, so nothing further needs configuring.
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |

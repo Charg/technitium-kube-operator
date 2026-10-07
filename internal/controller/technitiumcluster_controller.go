@@ -1111,6 +1111,10 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		tc.Status.Endpoint = endpoint
 		changed = true
 	}
+	if primaryEndpoint := nodeEndpoint(tc.Name, 0, r.OperatorNamespace); tc.Status.PrimaryEndpoint != primaryEndpoint {
+		tc.Status.PrimaryEndpoint = primaryEndpoint
+		changed = true
+	}
 	if tc.Status.ReadyReplicas != readyReplicas {
 		tc.Status.ReadyReplicas = readyReplicas
 		changed = true
