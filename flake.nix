@@ -23,6 +23,7 @@
             kustomize
             kubectl
             kind
+            prek
             docker-client
           ];
 

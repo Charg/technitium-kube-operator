@@ -128,10 +128,10 @@ lint-fix: golangci-lint
 lint-config: golangci-lint
     "{{ golangci_lint_custom }}" config verify
 
-# Run lint before every git push (opt-in, per clone)
+# Install the prek git hooks from .pre-commit-config.yaml (opt-in, per clone)
 [group('Development')]
 install-hooks:
-    git config core.hooksPath .githooks
+    prek install
 
 ##
 ## Build

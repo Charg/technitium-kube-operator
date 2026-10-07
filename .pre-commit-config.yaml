@@ -1,0 +1,13 @@
+# Git hooks, run with prek (https://github.com/j178/prek). Enable per clone
+# with `just install-hooks`; skip once with `git commit --no-verify`.
+repos:
+  - repo: local
+    hooks:
+      # Same lint CI runs. It type-checks the whole module, so it runs once per
+      # commit rather than per file.
+      - id: golangci-lint
+        name: golangci-lint
+        entry: just lint
+        language: system
+        types: [go]
+        pass_filenames: false
