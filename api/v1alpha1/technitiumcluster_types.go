@@ -148,6 +148,36 @@ type TechnitiumClusterSpec struct {
 	// +optional
 	Resources corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// affinity sets the pod scheduling affinity for the Technitium pods. When
+	// unset and replicas is greater than 1, the operator applies a soft
+	// (preferredDuringSchedulingIgnoredDuringExecution) pod anti-affinity on
+	// kubernetes.io/hostname so replicas spread across nodes where possible.
+	// Hard anti-affinity is opt-in: set this field with
+	// requiredDuringSchedulingIgnoredDuringExecution terms. A value set here is
+	// used as-is, with no default merged in.
+	// +optional
+	Affinity *corev1.Affinity `json:"affinity,omitempty"`
+
+	// topologySpreadConstraints controls how the Technitium pods are spread
+	// across topology domains such as zones or nodes.
+	// +listType=atomic
+	// +optional
+	TopologySpreadConstraints []corev1.TopologySpreadConstraint `json:"topologySpreadConstraints,omitempty"`
+
+	// tolerations lets the Technitium pods schedule onto tainted nodes.
+	// +listType=atomic
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// nodeSelector restricts the Technitium pods to nodes carrying all of the
+	// given labels.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// priorityClassName sets the PriorityClass of the Technitium pods.
+	// +optional
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+
 	// service configures the Service that fronts the Technitium instance.
 	// +optional
 	Service TechnitiumClusterServiceSpec `json:"service,omitempty"`

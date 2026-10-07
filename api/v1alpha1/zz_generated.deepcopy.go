@@ -12,6 +12,7 @@ the full license text.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -1130,6 +1131,32 @@ func (in *TechnitiumClusterSpec) DeepCopyInto(out *TechnitiumClusterSpec) {
 	}
 	in.Storage.DeepCopyInto(&out.Storage)
 	in.Resources.DeepCopyInto(&out.Resources)
+	if in.Affinity != nil {
+		in, out := &in.Affinity, &out.Affinity
+		*out = new(corev1.Affinity)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.TopologySpreadConstraints != nil {
+		in, out := &in.TopologySpreadConstraints, &out.TopologySpreadConstraints
+		*out = make([]corev1.TopologySpreadConstraint, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.Tolerations != nil {
+		in, out := &in.Tolerations, &out.Tolerations
+		*out = make([]corev1.Toleration, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.NodeSelector != nil {
+		in, out := &in.NodeSelector, &out.NodeSelector
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	in.Service.DeepCopyInto(&out.Service)
 	if in.AdminSecretRef != nil {
 		in, out := &in.AdminSecretRef, &out.AdminSecretRef
