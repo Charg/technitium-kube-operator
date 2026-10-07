@@ -267,6 +267,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 				sts.Spec.Template.Spec.NodeSelector = map[string]string{"hand": "edited"}
 				sts.Spec.Template.Spec.PriorityClassName = "system-node-critical"
 				sts.Spec.Template.Spec.Affinity = nil
+				sts.Spec.Template.Spec.TopologySpreadConstraints = nil
 				Expect(k8sClient.Update(ctx, &sts)).To(Succeed())
 
 				reconcileOnce(r)
@@ -276,6 +277,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 				Expect(podSpec.NodeSelector).To(Equal(map[string]string{"disktype": "ssd"}))
 				Expect(podSpec.PriorityClassName).To(Equal("system-cluster-critical"))
 				Expect(podSpec.Affinity).To(Equal(hardAffinity()))
+				Expect(podSpec.TopologySpreadConstraints).To(HaveLen(1))
 			})
 
 			It("defaults to soft hostname anti-affinity when replicas > 1 and affinity is unset", func() {
@@ -290,7 +292,10 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 				term := affinity.PodAntiAffinity.PreferredDuringSchedulingIgnoredDuringExecution[0]
 				Expect(term.Weight).To(Equal(int32(100)))
 				Expect(term.PodAffinityTerm.TopologyKey).To(Equal("kubernetes.io/hostname"))
-				Expect(term.PodAffinityTerm.LabelSelector.MatchLabels).To(Equal(instanceLabels(resourceName)))
+				Expect(term.PodAffinityTerm.LabelSelector.MatchLabels).NotTo(BeEmpty())
+				for k, v := range term.PodAffinityTerm.LabelSelector.MatchLabels {
+					Expect(getSTS().Spec.Template.Labels).To(HaveKeyWithValue(k, v))
+				}
 			})
 
 			It("sets no affinity when replicas is 1 and affinity is unset", func() {

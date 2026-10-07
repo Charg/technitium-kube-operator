@@ -1,3 +1,5 @@
+# Not listed in kustomization.yaml: hard anti-affinity leaves replicas Pending
+# on single-node clusters such as Kind. Apply it directly with kubectl apply -f.
 apiVersion: dns.packet.fail/v1alpha1
 kind: TechnitiumCluster
 metadata:
