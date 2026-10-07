@@ -52,8 +52,8 @@ type DNSAppReconciler struct {
 	OperatorNamespace string
 	// NewServerClient resolves a DNSApp's serverRef to a client for that
 	// managed instance. It is a seam so tests inject a fake; production leaves
-	// it nil and defaultServerClient resolves the TechnitiumCluster endpoint +
-	// admin Secret and builds a real client.
+	// it nil and defaultServerClient resolves the TechnitiumCluster primary
+	// endpoint + admin Secret and builds a real client.
 	NewServerClient func(ctx context.Context, serverRef dnsv1alpha1.SecretReference) (DNSAppAPI, error)
 
 	// clients resolves serverRef to a client for the cluster's Primary,

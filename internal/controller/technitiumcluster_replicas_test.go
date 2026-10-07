@@ -155,6 +155,24 @@ var _ = Describe("TechnitiumCluster Controller multi-replica provisioning", func
 			Expect(cr.Status.ReadyReplicas).To(Equal(int32(3)))
 		})
 
+		It("mints the admin token on the Primary rather than through the client Service", func() {
+			createClusterCR(3)
+			r := newReconciler()
+			var bootstrapEndpoints []string
+			r.NewBootstrapClient = func(endpoint, username, password string) (bootstrapAPI, error) {
+				bootstrapEndpoints = append(bootstrapEndpoints, endpoint)
+				return &fakeBootstrapClient{calls: new(int), token: "minted-token"}, nil
+			}
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			markStatefulSetReady(3)
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(bootstrapEndpoints).To(ConsistOf(nodeEndpoint(resourceName, 0, namespace)))
+		})
+
 		It("reports one status.Nodes entry per replica and status.Members as N/N once all are ready", func() {
 			createClusterCR(3)
 			r := newReconciler()

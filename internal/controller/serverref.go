@@ -20,9 +20,10 @@ import (
 	"github.com/charg/technitium-operator/internal/technitium"
 )
 
-// cachedServerClient is a built client together with the admin Secret
-// resourceVersion it was built from.
+// cachedServerClient is a built client together with the endpoint and admin
+// Secret resourceVersion it was built from; a change to either rebuilds it.
 type cachedServerClient struct {
+	endpoint              string
 	secretResourceVersion string
 	api                   *technitium.Client
 }
@@ -76,7 +77,8 @@ func (c *serverClientCache) resolve(ctx context.Context, reader client.Reader, o
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if entry, ok := c.entries[tc.Name]; ok && entry.secretResourceVersion == secret.ResourceVersion {
+	if entry, ok := c.entries[tc.Name]; ok && entry.endpoint == tc.Status.PrimaryEndpoint &&
+		entry.secretResourceVersion == secret.ResourceVersion {
 		return entry.api, nil
 	}
 
@@ -93,6 +95,10 @@ func (c *serverClientCache) resolve(ctx context.Context, reader client.Reader, o
 	if c.entries == nil {
 		c.entries = make(map[string]cachedServerClient)
 	}
-	c.entries[tc.Name] = cachedServerClient{secretResourceVersion: secret.ResourceVersion, api: api}
+	c.entries[tc.Name] = cachedServerClient{
+		endpoint:              tc.Status.PrimaryEndpoint,
+		secretResourceVersion: secret.ResourceVersion,
+		api:                   api,
+	}
 	return api, nil
 }
