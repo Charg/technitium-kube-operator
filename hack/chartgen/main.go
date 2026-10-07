@@ -22,11 +22,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 
 	"sigs.k8s.io/yaml"
@@ -168,7 +168,7 @@ func generateCRDs(p paths) error {
 		out.WriteString("metadata:\n")
 		fmt.Fprintf(&out, "  name: %s\n", crd.Metadata.Name)
 		out.WriteString("  annotations:\n")
-		for _, k := range sortedKeys(crd.Metadata.Annotations) {
+		for _, k := range slices.Sorted(maps.Keys(crd.Metadata.Annotations)) {
 			fmt.Fprintf(&out, "    %s: %s\n", k, crd.Metadata.Annotations[k])
 		}
 		out.WriteString("    {{- if .Values.crds.keep }}\n")
@@ -235,7 +235,7 @@ func helperRoleSources(p paths) ([]string, error) {
 		}
 		srcs = append(srcs, m...)
 	}
-	sort.Strings(srcs)
+	slices.Sort(srcs)
 	if len(srcs) == 0 {
 		return nil, errors.New("no *_{admin,editor,viewer}_role.yaml found under config/rbac")
 	}
@@ -355,15 +355,6 @@ func generateWebhooks(p paths) error {
 	return writeFile(filepath.Join(p.chart, "templates", "webhook-configurations.yaml"), out.String())
 }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 // renderedObject is the subset of a rendered manifest that verifyRendered compares.
 type renderedObject struct {
 	Kind     string     `json:"kind"`
@@ -444,11 +435,11 @@ func verifyRendered(p paths, r io.Reader) error {
 		return err
 	}
 	names := func(objs []renderedObject) []string {
-		var n []string
+		n := make([]string, 0, len(objs))
 		for _, o := range objs {
 			n = append(n, o.Metadata.Name)
 		}
-		sort.Strings(n)
+		slices.Sort(n)
 		return n
 	}
 	if want, got := names(wantCRDs), names(byKind(rendered, "CustomResourceDefinition")); !slices.Equal(want, got) {
