@@ -17,6 +17,17 @@ spec:
     size: 1Gi
 ```
 
+### Writes with multiple replicas
+
+With `spec.replicas` greater than 1, `<name>-0` initializes a Technitium cluster as the Primary and every other pod joins as a Secondary. Technitium does not reliably reject writes sent to a Secondary: zone, settings and DHCP changes are applied locally and never reach the Primary, and the Primary's next config sync overwrites local settings. The operator therefore sends every write, and bootstraps the admin token, through `primaryEndpoint`.
+
+As a result:
+
+- While `<name>-0` is down, writes fail and are retried. Technitium does not promote a Secondary automatically. Secondaries keep serving DNS from what they last synced.
+- A zone reaches the Secondaries only if it is a member of the cluster's catalog zone. Set `spec.catalog: cluster-catalog.<clusterDomain>` on the `Zone`. Otherwise only the Primary serves it.
+- Global settings (`ServerSettings`, block list URLs) and allowed/blocked entries sync to the Secondaries.
+- DHCP scopes are per node and do not sync. A `DHCPScope` is configured on the Primary only.
+
 ### Deletion and PVC retention
 
 Deleting a `TechnitiumCluster` is guarded by a finalizer, `dns.packet.fail/cluster-cleanup`, so the operator gets a chance to leave Technitium's own cluster state consistent before the StatefulSet, Services, and generated Secret are garbage collected via their owner references.
