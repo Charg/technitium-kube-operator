@@ -24,7 +24,7 @@ With `spec.replicas` greater than 1, `<name>-0` initializes a Technitium cluster
 As a result:
 
 - While `<name>-0` is down, writes fail and are retried. Technitium does not promote a Secondary automatically. Secondaries keep serving DNS from what they last synced.
-- A zone reaches the Secondaries only if it is a member of the cluster's catalog zone. Set `spec.catalog: cluster-catalog.<clusterDomain>` on the `Zone`. Otherwise only the Primary serves it.
+- A zone reaches the Secondaries only if it is a member of the cluster's catalog zone. A `Primary`, `Secondary`, `Stub` or `Forwarder` `Zone` joins `cluster-catalog.<clusterDomain>` automatically. Set `spec.catalog: ""` to keep a zone on the Primary only (this removes it from any catalog, and queries that land on a Secondary fail for it), or name another catalog to override. Scaling back to one replica leaves existing membership in place.
 - Global settings (`ServerSettings`, block list URLs) and allowed/blocked entries sync to the Secondaries.
 - DHCP scopes are per node and do not sync. A `DHCPScope` is configured on the Primary only.
 
@@ -65,7 +65,7 @@ A `Zone` is cluster-scoped (no namespace): a Technitium server has one global zo
 | `primaryNameServerAddresses` | []string | No | IP addresses or hostnames of the upstream primary. Used by `Secondary` and `Stub` zones, ignored by other types. |
 | `forwarder` | string | No | Address of the upstream resolver for a `Forwarder` zone. The special value `this-server` forwards to the local DNS server. Ignored by other types. |
 | `forwarderProtocol` | enum | No | Transport to the forwarder: `Udp`, `Tcp`, `Tls`, `Https`, `Quic`. Applies to `Forwarder` zones only; defaults to `Udp` on the server when unset. |
-| `catalog` | string | No | Name of an existing catalog zone this zone joins as a member. Applies to `Primary`, `Secondary`, `Stub`, and `Forwarder` zones. |
+| `catalog` | string | No | Name of a catalog zone this zone joins as a member. Applies to `Primary`, `Secondary`, `Stub`, and `Forwarder` zones. Defaults to `cluster-catalog.<clusterDomain>` when the cluster has more than one replica; `""` opts out. |
 
 Minimal Primary zone, once the `TechnitiumCluster` above is Ready:
 

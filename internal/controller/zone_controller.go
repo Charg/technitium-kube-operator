@@ -18,9 +18,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
@@ -193,15 +197,20 @@ func (r *ZoneReconciler) reconcileZone(ctx context.Context, zone *dnsv1alpha1.Zo
 		return err
 	}
 
+	catalog, err := r.desiredCatalog(ctx, zone)
+	if err != nil {
+		return err
+	}
+
 	current, err := api.GetZoneOptions(ctx, name)
 	switch {
 	case err == nil:
-		return r.reconcileOptions(ctx, api, zone, current)
+		return r.reconcileOptions(ctx, api, zone, current, catalog)
 	case !errors.Is(err, technitium.ErrZoneNotFound):
 		return err
 	}
 
-	if err := api.CreateZone(ctx, createOptionsFromSpec(zone)); err != nil {
+	if err := api.CreateZone(ctx, createOptionsFromSpec(zone, catalog)); err != nil {
 		// A concurrent create (another replica, a manual action) races us to the
 		// same zone; treat that as the success it effectively is.
 		if !errors.Is(err, technitium.ErrZoneAlreadyExists) {
@@ -216,7 +225,7 @@ func (r *ZoneReconciler) reconcileZone(ctx context.Context, zone *dnsv1alpha1.Zo
 
 // reconcileOptions corrects drift on a zone that already exists. Only options the
 // server reports back through GetZoneOptions can be reconciled.
-func (r *ZoneReconciler) reconcileOptions(ctx context.Context, api ZoneAPI, zone *dnsv1alpha1.Zone, current *technitium.ZoneOptions) error {
+func (r *ZoneReconciler) reconcileOptions(ctx context.Context, api ZoneAPI, zone *dnsv1alpha1.Zone, current *technitium.ZoneOptions, catalog *string) error {
 	log := logf.FromContext(ctx)
 	name := zone.Spec.ZoneName
 
@@ -228,8 +237,8 @@ func (r *ZoneReconciler) reconcileOptions(ctx context.Context, api ZoneAPI, zone
 	}
 
 	var update technitium.ZoneOptionsUpdate
-	if zone.Spec.Catalog != nil && current.Catalog != *zone.Spec.Catalog {
-		update.Catalog = zone.Spec.Catalog
+	if catalog != nil && current.Catalog != *catalog {
+		update.Catalog = catalog
 	}
 	if zone.Spec.DNSSECValidation != nil && current.DnssecValidation != *zone.Spec.DNSSECValidation {
 		update.DNSSECValidation = zone.Spec.DNSSECValidation
@@ -252,10 +261,69 @@ func (r *ZoneReconciler) reconcileOptions(ctx context.Context, api ZoneAPI, zone
 	return nil
 }
 
+// clusterCatalogZone names the catalog zone Technitium creates for a cluster,
+// "cluster-catalog.<clusterDomain>", using the same domain passed at cluster
+// init.
+func clusterCatalogZone(tc *dnsv1alpha1.TechnitiumCluster) string {
+	return "cluster-catalog." + clusterDomainFor(tc)
+}
+
+// desiredCatalog resolves the catalog the zone should be a member of, or nil
+// when the controller should not manage membership. An explicit spec.catalog
+// wins, including "" which opts the zone out of any catalog. Otherwise a zone
+// type that can join a catalog is placed in the cluster catalog when the
+// referenced TechnitiumCluster has several replicas, since that is the only way
+// the Secondaries serve it. A single-replica cluster or a missing cluster
+// leaves membership untouched.
+func (r *ZoneReconciler) desiredCatalog(ctx context.Context, zone *dnsv1alpha1.Zone) (*string, error) {
+	if zone.Spec.Catalog != nil {
+		return zone.Spec.Catalog, nil
+	}
+
+	switch zone.Spec.Type {
+	case "", dnsv1alpha1.ZoneTypePrimary, dnsv1alpha1.ZoneTypeSecondary,
+		dnsv1alpha1.ZoneTypeStub, dnsv1alpha1.ZoneTypeForwarder:
+	default:
+		return nil, nil
+	}
+
+	var tc dnsv1alpha1.TechnitiumCluster
+	if err := r.Get(ctx, client.ObjectKey{Name: zone.Spec.ServerRef.Name}, &tc); err != nil {
+		// A missing cluster is reported by the server-client resolve; it is not
+		// a reason to fail here.
+		return nil, client.IgnoreNotFound(err)
+	}
+	if tc.Spec.Replicas == nil || *tc.Spec.Replicas <= 1 {
+		return nil, nil
+	}
+
+	catalog := clusterCatalogZone(&tc)
+	logf.FromContext(ctx).V(1).Info("Joining Zone to the cluster catalog",
+		"zone", zone.Spec.ZoneName, "catalog", catalog)
+	return &catalog, nil
+}
+
+// zonesForCluster maps a TechnitiumCluster to the Zones that reference it, so a
+// change such as scaling replicas re-evaluates their catalog membership.
+func (r *ZoneReconciler) zonesForCluster(ctx context.Context, obj client.Object) []reconcile.Request {
+	var zones dnsv1alpha1.ZoneList
+	if err := r.List(ctx, &zones); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list Zones for TechnitiumCluster", "cluster", obj.GetName())
+		return nil
+	}
+	var reqs []reconcile.Request
+	for i := range zones.Items {
+		if zones.Items[i].Spec.ServerRef.Name == obj.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&zones.Items[i])})
+		}
+	}
+	return reqs
+}
+
 // createOptionsFromSpec maps a Zone spec onto the create-zone parameters. Forwarder
-// and catalog fields are only set when present in the spec so the server applies
-// its own defaults otherwise.
-func createOptionsFromSpec(zone *dnsv1alpha1.Zone) technitium.CreateZoneOptions {
+// fields are only set when present in the spec so the server applies its own
+// defaults otherwise. catalog is the resolved membership from desiredCatalog.
+func createOptionsFromSpec(zone *dnsv1alpha1.Zone, catalog *string) technitium.CreateZoneOptions {
 	spec := zone.Spec
 	opts := technitium.CreateZoneOptions{
 		Zone:                       spec.ZoneName,
@@ -268,8 +336,8 @@ func createOptionsFromSpec(zone *dnsv1alpha1.Zone) technitium.CreateZoneOptions 
 	if spec.ForwarderProtocol != nil {
 		opts.Protocol = string(*spec.ForwarderProtocol)
 	}
-	if spec.Catalog != nil {
-		opts.Catalog = *spec.Catalog
+	if catalog != nil {
+		opts.Catalog = *catalog
 	}
 	opts.DNSSECValidation = spec.DNSSECValidation
 	if spec.ForwarderProxy != nil {
@@ -355,6 +423,11 @@ func setCondition(zone *dnsv1alpha1.Zone, condType string, status metav1.Conditi
 func (r *ZoneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&dnsv1alpha1.Zone{}).
+		// Scaling a cluster past one replica puts its zones in the cluster
+		// catalog. The generation predicate skips status-only updates.
+		Watches(&dnsv1alpha1.TechnitiumCluster{},
+			handler.EnqueueRequestsFromMapFunc(r.zonesForCluster),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Named("zone").
 		Complete(r)
 }
