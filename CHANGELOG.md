@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/Charg/technitium-kube-operator/compare/v1.0.0...v1.0.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **release:** sign chart with Helm 4 digest and speed up image build ([#98](https://github.com/Charg/technitium-kube-operator/issues/98)) ([f9952ee](https://github.com/Charg/technitium-kube-operator/commit/f9952eefd3aed5c0a6ecc69775293e0e5a1351dd))
+
 ## [1.0.0](https://github.com/Charg/technitium-kube-operator/compare/v0.1.0...v1.0.0) (2026-10-08)
 
 
