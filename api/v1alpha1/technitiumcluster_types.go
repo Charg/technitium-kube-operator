@@ -12,7 +12,28 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
+
+// TechnitiumClusterPodDisruptionBudgetSpec configures the PodDisruptionBudget
+// the operator creates for a multi-replica TechnitiumCluster.
+type TechnitiumClusterPodDisruptionBudgetSpec struct {
+	// enabled controls whether the operator manages a PodDisruptionBudget. It
+	// defaults to true, and the budget only exists while replicas is greater
+	// than 1. Set it to false only if you manage your own PodDisruptionBudget
+	// for these pods: two budgets selecting the same pods make the eviction API
+	// refuse every eviction, so node drains hang. Setting it to false also
+	// deletes a budget the operator created earlier.
+	// +kubebuilder:default=true
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// maxUnavailable is the number or percentage of Technitium pods that may be
+	// voluntarily disrupted at once, for example by a node drain. Defaults to 1.
+	// +kubebuilder:default=1
+	// +optional
+	MaxUnavailable *intstr.IntOrString `json:"maxUnavailable,omitempty"`
+}
 
 // SecretReference points at a Secret that holds credentials the operator
 // consumes when reconciling a TechnitiumCluster.
@@ -261,6 +282,12 @@ type TechnitiumClusterSpec struct {
 	// service configures the Service that fronts the Technitium instance.
 	// +optional
 	Service TechnitiumClusterServiceSpec `json:"service,omitempty"`
+
+	// podDisruptionBudget configures the PodDisruptionBudget the operator
+	// creates when replicas is greater than 1, so a node drain cannot evict
+	// several resolvers at once. Unset behaves as enabled with maxUnavailable 1.
+	// +optional
+	PodDisruptionBudget TechnitiumClusterPodDisruptionBudgetSpec `json:"podDisruptionBudget,omitempty"`
 
 	// adminSecretRef points at a Secret holding the Technitium admin
 	// credentials. When unset, the operator generates a "<name>-admin" Secret

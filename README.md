@@ -55,6 +55,12 @@ spec:
             metallb.io/loadBalancerIPs: 192.168.1.52
 ```
 
+### Pod disruption budget
+
+With `spec.replicas` greater than 1 the operator creates a `PodDisruptionBudget` named `<name>` in the operator's namespace, selecting the cluster's pods with `maxUnavailable: 1`, so a node drain cannot evict several resolvers at once. Tune it with `spec.podDisruptionBudget.maxUnavailable` (a number or percentage). The budget is removed again when replicas drops to 1.
+
+If you already manage your own `PodDisruptionBudget` for these pods, remove it or set `spec.podDisruptionBudget.enabled: false`. Two budgets selecting the same pods make the eviction API refuse every eviction, so drains hang. The operator never adopts or deletes a budget it did not create: an existing, unowned `<name>` PDB marks the cluster Degraded with reason `PodDisruptionBudgetConflict`.
+
 ### Writes with multiple replicas
 
 With `spec.replicas` greater than 1, `<name>-0` initializes a Technitium cluster as the Primary and every other pod joins as a Secondary. Technitium does not reliably reject writes sent to a Secondary: zone, settings and DHCP changes are applied locally and never reach the Primary, and the Primary's next config sync overwrites local settings. The operator therefore sends every write, and bootstraps the admin token, through `primaryEndpoint`.

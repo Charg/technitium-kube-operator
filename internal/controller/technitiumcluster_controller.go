@@ -20,6 +20,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -269,6 +270,7 @@ func nodeEndpoint(clusterName string, ordinal int32, namespace string) string {
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services;persistentvolumeclaims;secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile provisions the Technitium workload for a TechnitiumCluster,
 // corrects drift on it, and once the workload is ready mints the durable
@@ -893,6 +895,9 @@ func (r *TechnitiumClusterReconciler) reconcileWorkload(ctx context.Context, tc 
 	sts, err := r.reconcileStatefulSet(ctx, tc)
 	if err != nil {
 		return nil, fmt.Errorf("reconciling statefulset: %w", err)
+	}
+	if err := r.reconcilePodDisruptionBudget(ctx, tc); err != nil {
+		return nil, fmt.Errorf("reconciling pod disruption budget: %w", err)
 	}
 	return sts, nil
 }
@@ -1591,6 +1596,9 @@ func (r *TechnitiumClusterReconciler) markDegraded(ctx context.Context, key clie
 	if errors.Is(cause, errAdminCredentialsRejected) {
 		reason = reasonAdminCredentialsRejected
 	}
+	if errors.Is(cause, errPDBNotOwned) {
+		reason = reasonPDBConflict
+	}
 	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, reason, cause.Error())
 	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionFalse, reason, cause.Error())
 	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, reason, cause.Error())
@@ -1636,6 +1644,7 @@ func (r *TechnitiumClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.StatefulSet{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.Secret{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Named("technitiumcluster").
 		Complete(r)
 }
