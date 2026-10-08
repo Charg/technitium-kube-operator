@@ -306,7 +306,12 @@ type TechnitiumClusterSpec struct {
 
 	// dnsServerDomain sets the Technitium DNS_SERVER_DOMAIN environment
 	// variable, used by the server for its own SOA and self-referential
-	// records.
+	// records. It applies as-is only when spec.replicas is 1. A clustered
+	// instance cannot share one server domain: Technitium names each node
+	// "<first label of its server domain>.<clusterDomain>" and refuses a
+	// second node with the same name, so with more than one replica every
+	// pod is instead given "<pod name>.<clusterDomain>", and this field only
+	// supplies clusterDomain's default.
 	// +optional
 	DNSServerDomain string `json:"dnsServerDomain,omitempty"`
 

@@ -10,6 +10,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -87,6 +88,14 @@ var _ = Describe("TechnitiumCluster Controller Service options", func() {
 		return svc
 	}
 
+	// specAnnotations drops the operator's own bookkeeping key, leaving just
+	// the annotations that came from spec.
+	specAnnotations := func(svc *corev1.Service) map[string]string {
+		annotations := maps.Clone(svc.Annotations)
+		delete(annotations, managedAnnotationsKey)
+		return annotations
+	}
+
 	portNumbers := func(svc *corev1.Service) []int32 {
 		ports := make([]int32, 0, len(svc.Spec.Ports))
 		for _, p := range svc.Spec.Ports {
@@ -138,6 +147,32 @@ var _ = Describe("TechnitiumCluster Controller Service options", func() {
 			svc = mustGetService(resourceName)
 			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
 			Expect(svc.Spec.ExternalTrafficPolicy).To(BeEmpty())
+		})
+
+		It("keeps annotations added by other controllers and removes only keys dropped from spec", func() {
+			createCluster(1, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				Annotations: map[string]string{"external-dns.alpha.kubernetes.io/hostname": "dns.example.com", "common": "yes"},
+			})
+			reconcileOnce()
+
+			svc := mustGetService(resourceName)
+			svc.Annotations["metallb.io/ip-allocated-from-pool"] = "lan"
+			Expect(k8sClient.Update(ctx, svc)).To(Succeed())
+			before := mustGetService(resourceName).ResourceVersion
+
+			reconcileOnce()
+			svc = mustGetService(resourceName)
+			Expect(svc.ResourceVersion).To(Equal(before))
+
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) {
+				delete(s.Annotations, "common")
+			})
+			reconcileOnce()
+
+			svc = mustGetService(resourceName)
+			Expect(svc.Annotations).NotTo(HaveKey("common"))
+			Expect(svc.Annotations).To(HaveKeyWithValue("external-dns.alpha.kubernetes.io/hostname", "dns.example.com"))
+			Expect(svc.Annotations).To(HaveKeyWithValue("metallb.io/ip-allocated-from-pool", "lan"))
 		})
 
 		It("drops the API port from the client Service only when exposeAPI is false", func() {
@@ -225,15 +260,50 @@ var _ = Describe("TechnitiumCluster Controller Service options", func() {
 				Expect(*svc.OwnerReferences[0].Controller).To(BeTrue())
 			}
 
-			Expect(mustGetService(resourceName + "-0").Annotations).To(Equal(map[string]string{
+			Expect(specAnnotations(mustGetService(resourceName + "-0"))).To(Equal(map[string]string{
 				"common": "yes", "metallb.io/address-pool": "lan", "metallb.io/loadBalancerIPs": "192.168.1.50",
 			}))
-			Expect(mustGetService(resourceName + "-1").Annotations).To(Equal(map[string]string{
+			Expect(specAnnotations(mustGetService(resourceName + "-1"))).To(Equal(map[string]string{
 				"common": "override", "metallb.io/address-pool": "lan", "metallb.io/loadBalancerIPs": "192.168.1.51",
 			}))
-			Expect(mustGetService(resourceName + "-2").Annotations).To(Equal(map[string]string{
+			Expect(specAnnotations(mustGetService(resourceName + "-2"))).To(Equal(map[string]string{
 				"common": "yes", "metallb.io/address-pool": "lan",
 			}))
+		})
+
+		It("keeps annotations added by other controllers and removes only keys dropped from spec", func() {
+			createCluster(1, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				PerReplica: &dnsv1alpha1.TechnitiumClusterPerReplicaServiceSpec{
+					Annotations: map[string]string{"common": "yes"},
+					Ordinals: []dnsv1alpha1.TechnitiumClusterReplicaServiceOverride{
+						{Ordinal: 0, Annotations: map[string]string{"metallb.io/loadBalancerIPs": "192.168.1.50"}},
+					},
+				},
+			})
+			reconcileOnce()
+
+			// MetalLB records the pool it allocated from on the Service.
+			svc := mustGetService(resourceName + "-0")
+			svc.Annotations["metallb.io/ip-allocated-from-pool"] = "lan"
+			Expect(k8sClient.Update(ctx, svc)).To(Succeed())
+			before := mustGetService(resourceName + "-0").ResourceVersion
+
+			// Stripping that annotation on every pass would make MetalLB put
+			// it back, which triggers the next reconcile: a hot loop.
+			reconcileOnce()
+			svc = mustGetService(resourceName + "-0")
+			Expect(svc.ResourceVersion).To(Equal(before))
+			Expect(svc.Annotations).To(HaveKeyWithValue("metallb.io/ip-allocated-from-pool", "lan"))
+
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) {
+				s.PerReplica.Annotations = nil
+			})
+			reconcileOnce()
+
+			svc = mustGetService(resourceName + "-0")
+			Expect(svc.Annotations).NotTo(HaveKey("common"))
+			Expect(svc.Annotations).To(HaveKeyWithValue("metallb.io/loadBalancerIPs", "192.168.1.50"))
+			Expect(svc.Annotations).To(HaveKeyWithValue("metallb.io/ip-allocated-from-pool", "lan"))
 		})
 
 		It("honours an explicit type and policy, and leaves the policy unset for ClusterIP", func() {
