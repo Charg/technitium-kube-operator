@@ -54,15 +54,10 @@ func (c *serverClientCache) resolve(ctx context.Context, reader client.Reader, o
 		return nil, fmt.Errorf("TechnitiumCluster %q is not ready yet: no primary endpoint reported", serverRef.Name)
 	}
 
-	secretNamespace := operatorNamespace
-	secretName := adminSecretName(tc.Name)
-	if tc.Spec.AdminSecretRef != nil {
-		secretName = tc.Spec.AdminSecretRef.Name
-		if tc.Spec.AdminSecretRef.Namespace != "" {
-			secretNamespace = tc.Spec.AdminSecretRef.Namespace
-		}
+	secretKey, err := adminSecretKeyFor(&tc, operatorNamespace)
+	if err != nil {
+		return nil, fmt.Errorf("TechnitiumCluster %q has an invalid admin secret reference: %w", serverRef.Name, err)
 	}
-	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
 
 	var secret corev1.Secret
 	if err := reader.Get(ctx, secretKey, &secret); err != nil {
