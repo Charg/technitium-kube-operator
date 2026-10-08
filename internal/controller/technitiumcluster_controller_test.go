@@ -15,6 +15,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -318,7 +319,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			It("does not mutate spec when applying the default affinity", func() {
 				cr := &dnsv1alpha1.TechnitiumCluster{Name: "x"}
 				cr.Spec.Replicas = ptr.To(int32(3))
-				_ = podTemplateFor(cr)
+				_ = podTemplateFor(cr, namespace)
 				Expect(cr.Spec.Affinity).To(BeNil())
 			})
 		})
@@ -362,6 +363,80 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(cr.Status.ObservedGeneration).To(Equal(cr.Generation))
 			Expect(meta.IsStatusConditionTrue(cr.Status.Conditions, dnsv1alpha1.TechnitiumClusterConditionProgressing)).To(BeTrue())
 			Expect(meta.IsStatusConditionFalse(cr.Status.Conditions, dnsv1alpha1.TechnitiumClusterConditionAvailable)).To(BeTrue())
+		})
+
+		Context("adminSecretRef namespace", func() {
+			It("marks the cluster Degraded and creates no workload when the namespace is not the operator's", func() {
+				createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+					cr.Spec.AdminSecretRef = &dnsv1alpha1.SecretReference{Name: "creds", Namespace: "elsewhere"}
+				})
+				result, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+				// Terminal spec error: only a spec edit can fix it, so no requeue.
+				Expect(result).To(Equal(reconcile.Result{}))
+
+				var cr dnsv1alpha1.TechnitiumCluster
+				Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+				degraded := meta.FindStatusCondition(cr.Status.Conditions, dnsv1alpha1.TechnitiumClusterConditionDegraded)
+				Expect(degraded).NotTo(BeNil())
+				Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+				Expect(degraded.Reason).To(Equal("InvalidAdminSecretRef"))
+				Expect(degraded.Message).To(ContainSubstring("must be empty or"))
+				Expect(degraded.Message).To(ContainSubstring(namespace))
+				Expect(cr.Status.ObservedGeneration).To(Equal(cr.Generation))
+
+				var sts appsv1.StatefulSet
+				err = k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			})
+
+			It("recovers once the namespace is corrected", func() {
+				createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+					cr.Spec.AdminSecretRef = &dnsv1alpha1.SecretReference{Name: "creds", Namespace: "elsewhere"}
+				})
+				r := newReconciler()
+				_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+
+				var cr dnsv1alpha1.TechnitiumCluster
+				Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+				cr.Spec.AdminSecretRef.Namespace = ""
+				Expect(k8sClient.Update(ctx, &cr)).To(Succeed())
+				_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+
+				Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+				Expect(meta.IsStatusConditionFalse(cr.Status.Conditions, dnsv1alpha1.TechnitiumClusterConditionDegraded)).To(BeTrue())
+				var sts appsv1.StatefulSet
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+			})
+
+			DescribeTable("provisions the workload mounting the Secret from the operator namespace",
+				func(refNamespace func() string) {
+					createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+						cr.Spec.AdminSecretRef = &dnsv1alpha1.SecretReference{Name: "creds", Namespace: refNamespace()}
+					})
+					_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+					Expect(err).NotTo(HaveOccurred())
+
+					var cr dnsv1alpha1.TechnitiumCluster
+					Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+					Expect(meta.FindStatusCondition(cr.Status.Conditions, dnsv1alpha1.TechnitiumClusterConditionDegraded).Status).
+						To(Equal(metav1.ConditionFalse))
+
+					var sts appsv1.StatefulSet
+					Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+					var mounted []string
+					for _, v := range sts.Spec.Template.Spec.Volumes {
+						if v.Secret != nil {
+							mounted = append(mounted, v.Secret.SecretName)
+						}
+					}
+					Expect(mounted).To(ContainElement("creds"))
+				},
+				Entry("empty namespace", func() string { return "" }),
+				Entry("namespace equal to the operator namespace", func() string { return namespace }),
+			)
 		})
 
 		It("does not create a Secret when adminSecretRef is set", func() {

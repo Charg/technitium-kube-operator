@@ -66,7 +66,12 @@ spec:
                 description: |-
                   adminSecretRef points at a Secret holding the Technitium admin
                   credentials. When unset, the operator generates a "<name>-admin" Secret
-                  with a random password.
+                  with a random password. The Secret must live in the operator's
+                  namespace, because the pods mount it from there: namespace must be
+                  empty or equal to the operator's namespace, and any other value marks
+                  the cluster Degraded with reason InvalidAdminSecretRef. It must contain
+                  "username" and "password" keys, and the operator writes a "token" key
+                  back into it once it has minted the admin API token.
                 properties:
                   name:
                     description: name is the Secret's name.

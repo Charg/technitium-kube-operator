@@ -278,6 +278,21 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, r.finalizeCluster(ctx, &tc)
 	}
 
+	// A misplaced adminSecretRef is a terminal spec error: the pod mounts the
+	// Secret from the operator namespace, so reading it from anywhere else
+	// would leave the pod and the operator on different Secrets. Reject it
+	// before any workload exists (and before a finalizer is needed for one),
+	// and do not requeue: only a spec edit can fix it, and that bumps the
+	// generation and triggers a new reconcile on its own.
+	if _, err := adminSecretKeyFor(&tc, r.OperatorNamespace); err != nil {
+		log.Error(err, "Rejected TechnitiumCluster adminSecretRef", "cluster", tc.Name)
+		if statusErr := r.markInvalidAdminSecretRef(ctx, req.NamespacedName, err); statusErr != nil {
+			log.Error(statusErr, "Failed to update TechnitiumCluster status", "cluster", tc.Name)
+			return ctrl.Result{}, statusErr
+		}
+		return ctrl.Result{}, nil
+	}
+
 	// Register the finalizer before touching the workload so a delete that
 	// arrives mid-flight still triggers cleanup. reconcileWorkload only reads
 	// the spec, so it is safe to continue with the same object after the
@@ -535,15 +550,10 @@ func (r *TechnitiumClusterReconciler) ensureToken(ctx context.Context, tc *dnsv1
 // adminCredentials (which only reads username/password for per-node client
 // construction).
 func (r *TechnitiumClusterReconciler) resolveAdminSecret(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*corev1.Secret, client.ObjectKey, error) {
-	secretNamespace := r.OperatorNamespace
-	secretName := adminSecretName(tc.Name)
-	if tc.Spec.AdminSecretRef != nil {
-		secretName = tc.Spec.AdminSecretRef.Name
-		if tc.Spec.AdminSecretRef.Namespace != "" {
-			secretNamespace = tc.Spec.AdminSecretRef.Namespace
-		}
+	secretKey, err := adminSecretKeyFor(tc, r.OperatorNamespace)
+	if err != nil {
+		return nil, secretKey, err
 	}
-	secretKey := client.ObjectKey{Namespace: secretNamespace, Name: secretName}
 
 	var secret corev1.Secret
 	if err := r.Get(ctx, secretKey, &secret); err != nil {
@@ -834,16 +844,36 @@ func headlessServiceName(clusterName string) string {
 }
 func adminSecretName(clusterName string) string { return clusterName + "-admin" }
 
-// resolvedAdminSecretName is the Secret the StatefulSet mounts for the admin
-// password: the generated "<name>-admin" Secret, or spec.adminSecretRef when
-// set. A Secret volume can only reference one in the pod's own namespace, so
-// adminSecretRef.Namespace is resolved only for documentation/validation
-// purposes elsewhere; the mount always resolves within OperatorNamespace.
-func resolvedAdminSecretName(tc *dnsv1alpha1.TechnitiumCluster) string {
-	if tc.Spec.AdminSecretRef != nil {
-		return tc.Spec.AdminSecretRef.Name
+// reasonInvalidAdminSecretRef is the condition reason for an adminSecretRef
+// whose namespace is not the operator's.
+const reasonInvalidAdminSecretRef = "InvalidAdminSecretRef"
+
+// adminSecretKeyFor is the single place that decides which Secret holds tc's
+// admin credentials: the generated "<name>-admin" Secret, or
+// spec.adminSecretRef.name when set, always in the operator namespace. The
+// workloads live there and a Secret volume can only reference its own
+// namespace, so the pod mount, the operator's reads and the token write-back
+// must all agree on it. A non-empty adminSecretRef.namespace that differs
+// from the operator namespace is an error; the returned key is still the
+// operator-namespace one so callers can name it in messages.
+func adminSecretKeyFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string) (client.ObjectKey, error) {
+	key := client.ObjectKey{Namespace: operatorNamespace, Name: adminSecretName(tc.Name)}
+	if ref := tc.Spec.AdminSecretRef; ref != nil {
+		key.Name = ref.Name
+		if ref.Namespace != "" && ref.Namespace != operatorNamespace {
+			return key, fmt.Errorf("spec.adminSecretRef.namespace %q is invalid: the admin Secret must live in the operator namespace, so the namespace must be empty or %q",
+				ref.Namespace, operatorNamespace)
+		}
 	}
-	return adminSecretName(tc.Name)
+	return key, nil
+}
+
+// resolvedAdminSecretName is the Secret name the StatefulSet mounts for the
+// admin password. Reconcile rejects an invalid adminSecretRef before the
+// workload is built, so the namespace error is not reachable here.
+func resolvedAdminSecretName(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string) string {
+	key, _ := adminSecretKeyFor(tc, operatorNamespace)
+	return key.Name
 }
 
 // reconcileHeadlessService ensures the StatefulSet's governing Service
@@ -970,7 +1000,7 @@ func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, 
 			replicas = *tc.Spec.Replicas
 		}
 		sts.Spec.Replicas = &replicas
-		sts.Spec.Template = podTemplateFor(tc)
+		sts.Spec.Template = podTemplateFor(tc, r.OperatorNamespace)
 
 		if sts.CreationTimestamp.IsZero() {
 			sts.Spec.ServiceName = headlessServiceName(tc.Name)
@@ -985,7 +1015,7 @@ func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, 
 // podTemplateFor builds the Technitium pod template from spec. It is rebuilt
 // in full on every reconcile so hand-edited images, resources, or env vars
 // are corrected back to spec.
-func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
+func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string) corev1.PodTemplateSpec {
 	env := []corev1.EnvVar{
 		// The web console's own password prompt is for interactive use;
 		// pointing the server at a file lets it pick up the admin password
@@ -1067,7 +1097,7 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.PodTemplateSpec {
 				{
 					Name: "admin",
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: resolvedAdminSecretName(tc),
+						SecretName: resolvedAdminSecretName(tc, operatorNamespace),
 						Items: []corev1.KeyToPath{
 							{Key: adminSecretPasswordKey, Path: "password"},
 						},
@@ -1438,6 +1468,25 @@ func (r *TechnitiumClusterReconciler) markDegraded(ctx context.Context, key clie
 	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, "ReconcileFailed", cause.Error())
 	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
 	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
+
+	return r.Status().Update(ctx, &tc)
+}
+
+// markInvalidAdminSecretRef records a terminal adminSecretRef error. Unlike
+// markDegraded it uses a specific reason and stamps observedGeneration, since
+// the controller has fully processed this spec and will not retry it. The
+// phase is left alone: there is no Degraded phase, and no workload was
+// touched.
+func (r *TechnitiumClusterReconciler) markInvalidAdminSecretRef(ctx context.Context, key client.ObjectKey, cause error) error {
+	var tc dnsv1alpha1.TechnitiumCluster
+	if err := r.Get(ctx, key, &tc); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	tc.Status.ObservedGeneration = tc.Generation
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, reasonInvalidAdminSecretRef, cause.Error())
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionFalse, reasonInvalidAdminSecretRef, cause.Error())
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, reasonInvalidAdminSecretRef, cause.Error())
 
 	return r.Status().Update(ctx, &tc)
 }

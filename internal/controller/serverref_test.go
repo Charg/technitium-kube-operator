@@ -112,6 +112,17 @@ var _ = Describe("serverClientCache", func() {
 		Expect(err).To(MatchError(ContainSubstring("no primary endpoint")))
 	})
 
+	It("refuses an adminSecretRef outside the operator namespace instead of reading it", func() {
+		setStatus(balanced.URL, primary.URL)
+		var tc dnsv1alpha1.TechnitiumCluster
+		Expect(k8sClient.Get(ctx, client.ObjectKey{Name: clusterName}, &tc)).To(Succeed())
+		tc.Spec.AdminSecretRef = &dnsv1alpha1.SecretReference{Name: adminSecretID.Name, Namespace: "elsewhere"}
+		Expect(k8sClient.Update(ctx, &tc)).To(Succeed())
+
+		_, err := cache.resolve(ctx, k8sClient, namespace, serverRef)
+		Expect(err).To(MatchError(ContainSubstring("operator namespace")))
+	})
+
 	It("wraps a missing TechnitiumCluster as NotFound", func() {
 		_, err := cache.resolve(ctx, k8sClient, namespace, dnsv1alpha1.SecretReference{Name: "does-not-exist"})
 		Expect(apierrors.IsNotFound(err)).To(BeTrue())
