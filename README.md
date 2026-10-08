@@ -39,8 +39,8 @@ Deleting a `TechnitiumCluster` is guarded by a finalizer, `dns.packet.fail/clust
 
 `spec.storage.retentionPolicy` controls the fate of the data PVCs. StatefulSet `volumeClaimTemplate` PVCs are not garbage collected along with the StatefulSet itself, so this is an explicit decision rather than something owner references handle for you:
 
-- `Retain` (default): the PVCs are left in place. Silently deleting a volume holding zone data and DNSSEC keys is a worse failure mode than an administrator later noticing an orphaned PVC and removing it by hand.
-- `Delete`: the PVCs are removed as part of the same finalizer pass, for a full, intentional teardown with no storage left behind.
+- `Retain` (default): the PVCs are left in place, and so is the generated `<name>-admin` Secret (its owner reference is released). Technitium applies the admin password only on a volume's first boot, so a cluster recreated with the same name must reuse that Secret to log in to the retained volumes; it re-adopts the Secret automatically. A caller-supplied `spec.adminSecretRef` Secret is never touched. If the Secret is lost while the PVCs survive, the new password is rejected and the cluster reports `Degraded` with reason `AdminCredentialsRejected`. Silently deleting a volume holding zone data and DNSSEC keys is a worse failure mode than an administrator later noticing an orphaned PVC and removing it by hand.
+- `Delete`: the PVCs are removed as part of the same finalizer pass, and the generated admin Secret is garbage collected with the cluster, for a full, intentional teardown with no storage left behind.
 
 ```yaml
 apiVersion: dns.packet.fail/v1alpha1

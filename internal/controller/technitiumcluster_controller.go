@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,6 +44,15 @@ const clusterPollInterval = 15 * time.Second
 // that is already up. Hand edits to the Deployment or Services (kubectl edit,
 // another controller) are only corrected on this cadence.
 const clusterDriftInterval = 5 * time.Minute
+
+// errAdminCredentialsRejected marks an ensureToken failure where the server
+// answered but refused the admin Secret's username/password. markDegraded
+// gives it its own condition reason.
+var errAdminCredentialsRejected = errors.New("admin credentials rejected")
+
+// reasonAdminCredentialsRejected is the Degraded reason for
+// errAdminCredentialsRejected.
+const reasonAdminCredentialsRejected = "AdminCredentialsRejected"
 
 // adminSecretUsernameKey and adminSecretPasswordKey are the keys the operator
 // writes into the generated admin Secret. internal/config/credentials.go reads
@@ -382,6 +392,14 @@ func (r *TechnitiumClusterReconciler) finalizeCluster(ctx context.Context, tc *d
 		r.teardownClusterState(ctx, tc)
 	}
 
+	if err := r.reconcileAdminSecretRetention(ctx, tc); err != nil {
+		// Returned and requeued for the same reason as the PVC step below:
+		// dropping the owner reference is what keeps the password that
+		// matches the retained volumes, so a transient failure must not let
+		// the finalizer clear and the Secret be garbage collected.
+		return err
+	}
+
 	if err := r.reconcilePVCRetention(ctx, tc); err != nil {
 		// Unlike the best-effort cluster teardown above, a failure here is
 		// returned and requeued: spec.storage.retentionPolicy Delete is an
@@ -486,6 +504,53 @@ func (r *TechnitiumClusterReconciler) reconcilePVCRetention(ctx context.Context,
 	return nil
 }
 
+// reconcileAdminSecretRetention ties the generated admin Secret's lifetime to
+// spec.storage.retentionPolicy. Technitium applies the admin password only on
+// the first boot of a data volume, so a retained PVC is only usable with the
+// password it was first booted with; if the Secret were garbage collected
+// while the PVC survived, recreating the cluster would generate a new
+// password the volume never accepts. Under Retain (or unset) the owner
+// reference is therefore removed so GC leaves the Secret alongside the PVCs;
+// under Delete it stays and the Secret is reaped. A caller-supplied
+// spec.adminSecretRef Secret is never touched. The Secret already being gone
+// is fine.
+func (r *TechnitiumClusterReconciler) reconcileAdminSecretRetention(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	log := logf.FromContext(ctx)
+
+	if tc.Spec.AdminSecretRef != nil || tc.Spec.Storage.RetentionPolicy == dnsv1alpha1.PVCRetentionPolicyDelete {
+		return nil
+	}
+
+	var secret corev1.Secret
+	secretKey := client.ObjectKey{Namespace: r.OperatorNamespace, Name: adminSecretName(tc.Name)}
+	if err := r.Get(ctx, secretKey, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("getting admin secret %s: %w", secretKey, err)
+	}
+
+	kept := make([]metav1.OwnerReference, 0, len(secret.OwnerReferences))
+	for _, ref := range secret.OwnerReferences {
+		if ref.UID != tc.UID {
+			kept = append(kept, ref)
+		}
+	}
+	if len(kept) == len(secret.OwnerReferences) {
+		return nil
+	}
+
+	secret.OwnerReferences = kept
+	if err := r.Update(ctx, &secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("releasing admin secret %s: %w", secretKey, err)
+	}
+	log.Info("Retaining generated admin Secret alongside data PVCs", "cluster", tc.Name, "secret", secretKey.Name)
+	return nil
+}
+
 // ensureToken mints a durable API token for a bootstrapped instance and
 // stores it in the admin Secret's token key. It is idempotent: a Secret that
 // already carries a token is left untouched, since minting a second one
@@ -493,10 +558,11 @@ func (r *TechnitiumClusterReconciler) reconcilePVCRetention(ctx context.Context,
 // non-expiring) but would orphan whatever the Zone controller already holds
 // under the original.
 //
-// A failure from CreateToken itself (the server not accepting connections
-// yet, or the generated password not yet applied so the credentials are
-// rejected) is expected during the normal bootstrap window. It is logged
-// here and reported as "not yet bootstrapped" (false, nil) rather than
+// A server that answers but rejects the credentials is not transient (see
+// errAdminCredentialsRejected) and is returned as an error. Any other failure
+// from CreateToken (the server not accepting connections yet, for example)
+// is expected during the normal bootstrap window. It is logged here and
+// reported as "not yet bootstrapped" (false, nil) rather than
 // returned as an error, so Reconcile requeues the resource in phase
 // Bootstrapping instead of flapping it to Degraded on every poll until the
 // server catches up. Only a problem with the Secret itself, missing
@@ -530,6 +596,15 @@ func (r *TechnitiumClusterReconciler) ensureToken(ctx context.Context, tc *dnsv1
 	}
 
 	token, err := apiClient.CreateToken(ctx, operatorTokenName)
+	if errors.Is(err, technitium.ErrInvalidCredentials) {
+		// The server is up and answered, so this is not the bootstrap
+		// window: Technitium applies DNS_SERVER_ADMIN_PASSWORD_FILE only on
+		// first boot of a data volume, so a password that is rejected now
+		// will not start working by waiting.
+		return false, fmt.Errorf("%w: the password in admin secret %s does not match the one stored on the data volume, "+
+			"likely because the Secret was regenerated against a retained PVC (restore the original Secret or delete the PVCs): %s",
+			errAdminCredentialsRejected, secretKey, err.Error())
+	}
 	if err != nil {
 		log.Info("Deferring admin token mint until the instance accepts the generated credentials",
 			"cluster", tc.Name, "endpoint", endpoint, "error", err.Error())
@@ -946,6 +1021,14 @@ func (r *TechnitiumClusterReconciler) reconcileAdminSecret(ctx context.Context, 
 		Namespace: r.OperatorNamespace}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		// A Secret orphaned by reconcileAdminSecretRetention has no owner and
+		// is simply adopted here. One whose old controller reference is still
+		// present (GC has not yet reaped it after a quick delete/recreate) has
+		// a stale UID that SetControllerReference would refuse; drop it so the
+		// new cluster takes the Secret over, keeping its password and token.
+		secret.OwnerReferences = slices.DeleteFunc(secret.OwnerReferences, func(ref metav1.OwnerReference) bool {
+			return ref.Controller != nil && *ref.Controller && ref.Kind == "TechnitiumCluster" && ref.UID != tc.UID
+		})
 		if err := controllerutil.SetControllerReference(tc, secret, r.Scheme); err != nil {
 			return err
 		}
@@ -1465,9 +1548,13 @@ func (r *TechnitiumClusterReconciler) markDegraded(ctx context.Context, key clie
 		return client.IgnoreNotFound(err)
 	}
 
-	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, "ReconcileFailed", cause.Error())
-	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
-	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, "ReconcileFailed", cause.Error())
+	reason := "ReconcileFailed"
+	if errors.Is(cause, errAdminCredentialsRejected) {
+		reason = reasonAdminCredentialsRejected
+	}
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, reason, cause.Error())
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, metav1.ConditionFalse, reason, cause.Error())
+	setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, metav1.ConditionFalse, reason, cause.Error())
 
 	return r.Status().Update(ctx, &tc)
 }

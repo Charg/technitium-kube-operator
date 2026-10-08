@@ -20,6 +20,11 @@ var (
 	ErrZoneAlreadyExists = errors.New("technitium: zone already exists")
 	ErrZoneNotFound      = errors.New("technitium: zone not found")
 	ErrInvalidToken      = errors.New("technitium: invalid or expired token")
+	// ErrInvalidCredentials means the server rejected a username/password
+	// pair (createToken/login). It is distinct from ErrInvalidToken, which is
+	// a bad session token, and from a connection failure, where no response
+	// was received at all.
+	ErrInvalidCredentials = errors.New("technitium: invalid username or password")
 	// ErrClusterAlreadyInitialized means the node init/initJoin was called
 	// against already has a cluster (as Primary or Secondary). Re-running
 	// either call on such a node is the expected steady state once clustering
@@ -86,6 +91,12 @@ func classifyStatus(status, message string) error {
 	}
 
 	lower := strings.ToLower(message)
+	// Technitium answers a bad user/pass with status "error" and the message
+	// "Invalid username or password for user: <name>"; there is no dedicated
+	// status for it, so the message is the only signal.
+	if strings.Contains(lower, "invalid username or password") {
+		return fmt.Errorf("%w: %s", ErrInvalidCredentials, message)
+	}
 	isRecord := strings.Contains(lower, "record")
 	isApp := strings.Contains(lower, "app")
 	isDHCPReservation := strings.Contains(lower, "reservation") || strings.Contains(lower, "lease")
