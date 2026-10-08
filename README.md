@@ -131,6 +131,37 @@ example-com   example.com   Primary   True    12s
 
 More examples, including a `Forwarder` zone, are in `config/samples/dns_v1alpha1_zone.yaml`.
 
+## Metrics
+
+Technitium has no Prometheus endpoint of its own, so the operator polls each ready node's dashboard API (`/api/dashboard/stats/get`, last hour, that node only) in the background and republishes the values on its own metrics endpoint (`--metrics-bind-address`). Each node is read directly through its headless-Service address with the cluster's minted API token, so there is one series set per pod. Polling runs only on the elected leader.
+
+The query counters are aggregates over Technitium's rolling last-hour window, so they are **gauges that rise and fall as the window slides, not monotonic counters**. Do not wrap them in `rate()`; use them as "queries in the last hour" (or `delta()`/`deriv()` for a trend). The window has up to one polling interval of lag.
+
+All metrics carry the labels `cluster` (TechnitiumCluster name) and `node` (pod name):
+
+| Metric | Extra label | Meaning |
+| --- | --- | --- |
+| `technitium_dns_queries_last_hour` | `result`: `no_error`, `server_failure`, `nx_domain`, `refused` | Queries by response code |
+| `technitium_dns_queries_by_source_last_hour` | `source`: `authoritative`, `recursive`, `cached`, `blocked`, `dropped` | Queries by how they were answered |
+| `technitium_dns_clients_last_hour` | | Distinct clients |
+| `technitium_dns_cache_entries` | | Entries in the DNS cache |
+| `technitium_dns_zones` | | Hosted zones |
+| `technitium_dns_allowed_zones`, `technitium_dns_blocked_zones` | | Domains in the allowed / blocked zones |
+| `technitium_dns_allow_list_zones`, `technitium_dns_block_list_zones` | | Domains loaded from allow / block lists |
+| `technitium_dns_stats_scrape_success` | | 1 if the last read of the node succeeded, else 0 |
+| `technitium_dns_stats_last_success_timestamp_seconds` | | Unix time of the last successful read |
+
+When a node is not ready or cannot be read, its data series are removed (rather than left at their last value) and `technitium_dns_stats_scrape_success` is set to 0. Series for deleted clusters and nodes are removed. A cluster that has not been bootstrapped yet (no token) publishes nothing.
+
+Example, the blocked share of the last hour's queries per node:
+
+```promql
+technitium_dns_queries_by_source_last_hour{source="blocked"}
+  / ignoring(source) sum without (source) (technitium_dns_queries_by_source_last_hour)
+```
+
+Set `--technitium-stats-interval` (default `60s`) to change how often nodes are polled, or `0` to disable the collector.
+
 ## Getting Started
 
 ### Prerequisites
