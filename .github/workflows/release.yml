@@ -109,9 +109,14 @@ jobs:
             --version "$version" \
             --app-version "$version" \
             --destination dist
-          helm push "dist/technitium-operator-${version}.tgz" "$CHART_REPO" 2>push.log
+          # Helm 3 reports the digest on stderr, Helm 4 on stdout; capture both.
+          helm push "dist/technitium-operator-${version}.tgz" "$CHART_REPO" >push.log 2>&1
           cat push.log
           digest=$(awk '/Digest:/ {print $2}' push.log)
+          if [ -z "$digest" ]; then
+            echo "::error::Could not find the chart digest in helm push output"
+            exit 1
+          fi
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
       - name: Sign chart
