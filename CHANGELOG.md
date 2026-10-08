@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/Charg/technitium-kube-operator/compare/v1.0.1...v1.0.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* **release:** log in to GHCR for cosign in the chart job ([#100](https://github.com/Charg/technitium-kube-operator/issues/100)) ([5cc65f9](https://github.com/Charg/technitium-kube-operator/commit/5cc65f955593c130575f51942151dce1411bc1bf))
+
 ## [1.0.1](https://github.com/Charg/technitium-kube-operator/compare/v1.0.0...v1.0.1) (2026-10-08)
 
 
