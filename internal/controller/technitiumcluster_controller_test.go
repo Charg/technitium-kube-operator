@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -143,6 +144,15 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(container.VolumeMounts).To(ContainElement(corev1.VolumeMount{
 				Name: "data", MountPath: "/etc/dns",
 			}))
+
+			// Readiness gates DNS traffic on the DNS listener; liveness
+			// watches the web API port.
+			Expect(container.ReadinessProbe).NotTo(BeNil())
+			Expect(container.ReadinessProbe.TCPSocket).NotTo(BeNil())
+			Expect(container.ReadinessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(53)))
+			Expect(container.LivenessProbe).NotTo(BeNil())
+			Expect(container.LivenessProbe.TCPSocket).NotTo(BeNil())
+			Expect(container.LivenessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(5380)))
 
 			Expect(sts.Spec.VolumeClaimTemplates).To(HaveLen(1))
 			Expect(sts.Spec.VolumeClaimTemplates[0].Name).To(Equal("data"))
