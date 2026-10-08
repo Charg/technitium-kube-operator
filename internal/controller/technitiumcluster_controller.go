@@ -327,7 +327,7 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		desiredReplicas = *tc.Spec.Replicas
 	}
 	readyReplicas := sts.Status.ReadyReplicas
-	endpoint := fmt.Sprintf("http://%s.%s.svc:5380", tc.Name, r.OperatorNamespace)
+	endpoint := clientServiceEndpoint(&tc, r.OperatorNamespace)
 
 	// Bootstrap only once the workload itself is up: minting against an
 	// endpoint with no listener behind it yet is a wasted round trip that
@@ -879,6 +879,9 @@ func (r *TechnitiumClusterReconciler) reconcileWorkload(ctx context.Context, tc 
 	if err := r.reconcileClientService(ctx, tc); err != nil {
 		return nil, fmt.Errorf("reconciling client service: %w", err)
 	}
+	if err := r.reconcileReplicaServices(ctx, tc); err != nil {
+		return nil, fmt.Errorf("reconciling per-replica services: %w", err)
+	}
 	// A caller-supplied adminSecretRef means the credentials are managed
 	// outside this controller; generating one anyway would fight whatever
 	// owns that Secret.
@@ -969,7 +972,7 @@ func (r *TechnitiumClusterReconciler) reconcileHeadlessService(ctx context.Conte
 			svc.Spec.ClusterIP = corev1.ClusterIPNone
 		}
 		svc.Spec.Selector = instanceLabels(tc.Name)
-		svc.Spec.Ports = dnsServicePorts()
+		svc.Spec.Ports = dnsServicePorts(true)
 		return nil
 	})
 	return err
@@ -993,21 +996,45 @@ func (r *TechnitiumClusterReconciler) reconcileClientService(ctx context.Context
 		if tc.Spec.Service.Type != "" {
 			svc.Spec.Type = tc.Spec.Service.Type
 		}
+		// The policy is cleared whenever the type cannot carry one: the
+		// apiserver rejects externalTrafficPolicy on ClusterIP, so a switch
+		// back from LoadBalancer+Local must not leave it behind.
+		svc.Spec.ExternalTrafficPolicy = ""
+		if serviceTypeSupportsTrafficPolicy(svc.Spec.Type) {
+			svc.Spec.ExternalTrafficPolicy = tc.Spec.Service.ExternalTrafficPolicy
+		}
 		svc.Spec.Selector = instanceLabels(tc.Name)
-		svc.Spec.Ports = dnsServicePorts()
+		svc.Spec.Ports = preserveNodePorts(dnsServicePorts(apiExposed(tc)), svc.Spec.Ports)
 		return nil
 	})
 	return err
 }
 
-// dnsServicePorts is the port set shared by both Services: DNS over UDP and
-// TCP, plus the Technitium web/API port.
-func dnsServicePorts() []corev1.ServicePort {
-	return []corev1.ServicePort{
+// apiExposed reports whether the client Service publishes the API port.
+func apiExposed(tc *dnsv1alpha1.TechnitiumCluster) bool {
+	return tc.Spec.Service.ExposeAPI == nil || *tc.Spec.Service.ExposeAPI
+}
+
+// clientServiceEndpoint is the value of status.endpoint: the client Service's
+// API URL, or its DNS address once the API port is no longer published.
+func clientServiceEndpoint(tc *dnsv1alpha1.TechnitiumCluster, namespace string) string {
+	if !apiExposed(tc) {
+		return fmt.Sprintf("%s.%s.svc:53", clientServiceName(tc.Name), namespace)
+	}
+	return fmt.Sprintf("http://%s.%s.svc:5380", clientServiceName(tc.Name), namespace)
+}
+
+// dnsServicePorts is the port set of the Services: DNS over UDP and TCP, plus
+// the Technitium web/API port when withAPI is true.
+func dnsServicePorts(withAPI bool) []corev1.ServicePort {
+	ports := []corev1.ServicePort{
 		{Name: "dns-udp", Port: 53, Protocol: corev1.ProtocolUDP, TargetPort: intstr.FromInt32(53)},
 		{Name: "dns-tcp", Port: 53, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(53)},
-		{Name: "api", Port: 5380, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(5380)},
 	}
+	if withAPI {
+		ports = append(ports, corev1.ServicePort{Name: "api", Port: 5380, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(5380)})
+	}
+	return ports
 }
 
 // reconcileAdminSecret ensures the generated admin credentials Secret exists.

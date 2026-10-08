@@ -21,3 +21,20 @@ spec:
             matchLabels:
               app.kubernetes.io/name: technitium
               app.kubernetes.io/instance: technitiumcluster-ha-sample
+  # MetalLB homelab: keep the admin API off the LAN and give each replica its
+  # own address. Uncomment and adjust the IPs.
+  # service:
+  #   exposeAPI: false
+  #   perReplica:
+  #     type: LoadBalancer
+  #     externalTrafficPolicy: Local
+  #     ordinals:
+  #       - ordinal: 0
+  #         annotations:
+  #           metallb.io/loadBalancerIPs: 192.168.1.50
+  #       - ordinal: 1
+  #         annotations:
+  #           metallb.io/loadBalancerIPs: 192.168.1.51
+  #       - ordinal: 2
+  #         annotations:
+  #           metallb.io/loadBalancerIPs: 192.168.1.52

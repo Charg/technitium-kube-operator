@@ -1145,11 +1145,106 @@ spec:
                       annotations are copied onto the generated Service, for example to
                       configure a cloud load balancer or an external-dns hostname.
                     type: object
+                  exposeAPI:
+                    default: true
+                    description: |-
+                      exposeAPI controls whether the client Service publishes the Technitium
+                      web/API port (5380). Set it to false to keep the plain-HTTP admin API
+                      off a LAN-facing address; the Service then exposes DNS (53 UDP and TCP)
+                      only. The operator itself reaches the API through the headless Service,
+                      which always keeps 5380. When false, status.endpoint reports the DNS
+                      address of the client Service ("<name>.<namespace>.svc:53") instead of
+                      an HTTP URL.
+                    type: boolean
+                  externalTrafficPolicy:
+                    description: |-
+                      externalTrafficPolicy is applied to the client Service. "Local"
+                      preserves the client source IP, so query logs show the real client, and
+                      only routes to nodes that run a ready replica. Leave it unset for the
+                      Kubernetes default ("Cluster"). It may only be set when type is
+                      LoadBalancer or NodePort.
+                    enum:
+                    - Cluster
+                    - Local
+                    type: string
+                  perReplica:
+                    description: |-
+                      perReplica, when set, creates one additional Service per StatefulSet
+                      ordinal, named "<cluster name>-<ordinal>", that selects exactly that
+                      replica. Use it to give each replica its own stable address, for
+                      example one LoadBalancer IP per replica. Per-replica Services expose DNS
+                      (53 UDP and TCP) only, never the API port. Removing the field deletes
+                      them; scaling down deletes the Services of the removed ordinals.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: annotations are copied onto every per-replica
+                          Service.
+                        type: object
+                      externalTrafficPolicy:
+                        description: |-
+                          externalTrafficPolicy is applied to every per-replica Service. When
+                          unset it defaults to "Local" for type LoadBalancer or NodePort, so each
+                          replica sees real client source IPs; it is left unset for other types.
+                          It may only be set when type is LoadBalancer or NodePort.
+                        enum:
+                        - Cluster
+                        - Local
+                        type: string
+                      ordinals:
+                        description: |-
+                          ordinals holds per-replica overrides. An entry's annotations are merged
+                          over the common annotations for that ordinal's Service, which is how
+                          each replica is pinned to its own address, for example with
+                          "metallb.io/loadBalancerIPs". Entries for ordinals at or above
+                          spec.replicas are ignored.
+                        items:
+                          description: |-
+                            TechnitiumClusterReplicaServiceOverride customizes the per-replica Service
+                            of a single StatefulSet ordinal.
+                          properties:
+                            annotations:
+                              additionalProperties:
+                                type: string
+                              description: |-
+                                annotations are merged over the common per-replica annotations for this
+                                ordinal's Service; a key set here wins.
+                              type: object
+                            ordinal:
+                              description: ordinal is the StatefulSet ordinal this
+                                override applies to.
+                              format: int32
+                              minimum: 0
+                              type: integer
+                          required:
+                          - ordinal
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - ordinal
+                        x-kubernetes-list-type: map
+                      type:
+                        default: LoadBalancer
+                        description: type is the Kubernetes Service type of every
+                          per-replica Service.
+                        type: string
+                    type: object
+                    x-kubernetes-validations:
+                    - message: externalTrafficPolicy may only be set when type is
+                        LoadBalancer or NodePort
+                      rule: '!has(self.externalTrafficPolicy) || (has(self.type) ?
+                        self.type : ''LoadBalancer'') in [''LoadBalancer'', ''NodePort'']'
                   type:
                     default: ClusterIP
                     description: type is the Kubernetes Service type.
                     type: string
                 type: object
+                x-kubernetes-validations:
+                - message: externalTrafficPolicy may only be set when type is LoadBalancer
+                    or NodePort
+                  rule: '!has(self.externalTrafficPolicy) || (has(self.type) ? self.type
+                    : ''ClusterIP'') in [''LoadBalancer'', ''NodePort'']'
               storage:
                 description: |-
                   storage configures the persistent volume backing the Technitium data
@@ -1487,8 +1582,12 @@ spec:
                 x-kubernetes-list-type: map
               endpoint:
                 description: |-
-                  endpoint is the in-cluster URL of the client Service, which
-                  load-balances across every replica.
+                  endpoint is the in-cluster address of the client Service, which
+                  load-balances across every replica. It is the API URL
+                  ("http://<name>.<namespace>.svc:5380") unless spec.service.exposeAPI is
+                  false, in which case the Service no longer serves the API and it is the
+                  DNS address ("<name>.<namespace>.svc:53"). It is informational: the
+                  operator calls the API through primaryEndpoint.
                 type: string
               members:
                 description: |-
