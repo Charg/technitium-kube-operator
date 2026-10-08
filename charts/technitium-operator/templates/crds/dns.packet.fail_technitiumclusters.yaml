@@ -73,12 +73,16 @@ spec:
                 description: |-
                   adminSecretRef points at a Secret holding the Technitium admin
                   credentials. When unset, the operator generates a "<name>-admin" Secret
-                  with a random password. The Secret must live in the operator's
-                  namespace, because the pods mount it from there: namespace must be
-                  empty or equal to the operator's namespace, and any other value marks
-                  the cluster Degraded with reason InvalidAdminSecretRef. It must contain
-                  "username" and "password" keys, and the operator writes a "token" key
-                  back into it once it has minted the admin API token.
+                  with a random password, owned by the cluster. With storage.retentionPolicy
+                  "Retain" (the default) that generated Secret outlives the TechnitiumCluster
+                  alongside the data PVCs, and a cluster recreated with the same name
+                  re-adopts it. A Secret referenced here is never deleted by the operator
+                  on cluster deletion. The Secret must live in the operator's namespace,
+                  because the pods mount it from there: namespace must be empty or equal
+                  to the operator's namespace, and any other value marks the cluster
+                  Degraded with reason InvalidAdminSecretRef. It must contain "username"
+                  and "password" keys, and the operator writes a "token" key back into it
+                  once it has minted the admin API token.
                 properties:
                   name:
                     description: name is the Secret's name.
@@ -1159,7 +1163,12 @@ spec:
                       them in place: they are not owner-reference garbage collected along
                       with the StatefulSet, so leaving them requires no special handling,
                       only restraint. "Delete" removes them as part of the finalizer's
-                      teardown, for callers who want no storage left behind.
+                      teardown, for callers who want no storage left behind. Under "Retain"
+                      the operator-generated admin Secret is retained too (its owner
+                      reference is released on deletion), because Technitium only applies the
+                      admin password on a volume's first boot: a recreated cluster must reuse
+                      the Secret to keep working against the retained volumes. Under "Delete"
+                      the generated Secret is garbage collected with the cluster.
                     enum:
                     - Retain
                     - Delete
