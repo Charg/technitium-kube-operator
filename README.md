@@ -17,6 +17,44 @@ spec:
     size: 1Gi
 ```
 
+### Service options
+
+`spec.service` shapes the client Service (`<name>`), which load-balances DNS across every replica:
+
+- `type` and `annotations`: the Service type and annotations, for example for a load balancer or external-dns.
+- `externalTrafficPolicy` (`Cluster` or `Local`): `Local` preserves client source IPs in query logs. Only valid for type `LoadBalancer` or `NodePort`.
+- `exposeAPI` (default `true`): when `false` the client Service publishes DNS (53 UDP and TCP) only, keeping the plain-HTTP admin API (5380) off the Service address. The operator is unaffected because it reaches the API through the headless Service, which always keeps 5380. `status.endpoint` is then the DNS address `<name>.<namespace>.svc:53` rather than an HTTP URL.
+- `perReplica`: creates one Service per StatefulSet ordinal, named `<name>-<ordinal>`, selecting only that pod and exposing DNS only (never 5380). Its `type` defaults to `LoadBalancer` and its `externalTrafficPolicy` to `Local` (for `LoadBalancer` and `NodePort`). `annotations` apply to every per-replica Service, and `ordinals[].annotations` are merged over them for one ordinal, which is how each replica is pinned to its own address. Scaling down deletes the Services of the removed ordinals, and removing `perReplica` deletes them all. Only Services owned by the cluster are ever deleted.
+
+A MetalLB homelab with one stable LAN IP per replica, source IPs preserved, and the admin API kept off the LAN:
+
+```yaml
+apiVersion: dns.packet.fail/v1alpha1
+kind: TechnitiumCluster
+metadata:
+  name: dns
+spec:
+  replicas: 3
+  storage:
+    size: 1Gi
+  service:
+    type: ClusterIP
+    exposeAPI: false
+    perReplica:
+      type: LoadBalancer
+      externalTrafficPolicy: Local
+      ordinals:
+        - ordinal: 0
+          annotations:
+            metallb.io/loadBalancerIPs: 192.168.1.50
+        - ordinal: 1
+          annotations:
+            metallb.io/loadBalancerIPs: 192.168.1.51
+        - ordinal: 2
+          annotations:
+            metallb.io/loadBalancerIPs: 192.168.1.52
+```
+
 ### Writes with multiple replicas
 
 With `spec.replicas` greater than 1, `<name>-0` initializes a Technitium cluster as the Primary and every other pod joins as a Secondary. Technitium does not reliably reject writes sent to a Secondary: zone, settings and DHCP changes are applied locally and never reach the Primary, and the Primary's next config sync overwrites local settings. The operator therefore sends every write, and bootstraps the admin token, through `primaryEndpoint`.
