@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/Charg/technitium-kube-operator/compare/v1.0.2...v1.0.3) (2026-10-08)
+
+
+### Bug Fixes
+
+* **cluster:** give each replica its own server domain and keep foreign Service annotations ([#102](https://github.com/Charg/technitium-kube-operator/issues/102)) ([945caa5](https://github.com/Charg/technitium-kube-operator/commit/945caa59e541a655dc5c6571888191d28888a1b1))
+
 ## [1.0.2](https://github.com/Charg/technitium-kube-operator/compare/v1.0.1...v1.0.2) (2026-10-08)
 
 
