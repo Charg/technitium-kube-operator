@@ -1110,11 +1110,23 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string)
 		env = append(env, corev1.EnvVar{Name: "DNS_SERVER_DOMAIN", Value: tc.Spec.DNSServerDomain})
 	}
 
-	probe := &corev1.Probe{
-		// An HTTP path probe is unreliable here: Technitium's root path
-		// redirects, and kubelet does not follow redirects when scoring probe
-		// success. A bare TCP check on the web API port is a reliable proxy
-		// for "the server process is up and listening".
+	// Both probes are bare TCP checks: the image has no tooling such as dig
+	// to run an exec probe, and an HTTP path probe is unreliable because
+	// Technitium's root path redirects and kubelet does not follow redirects
+	// when scoring probe success.
+	//
+	// Readiness targets the DNS port (Technitium serves DNS over TCP by
+	// default) so the client Service only sends DNS traffic to a pod that is
+	// actually listening on 53, which can lag the web listener. Liveness
+	// targets the web API port: it is a reliable proxy for "the server
+	// process is up", and a pod that is merely slow on DNS should be left out
+	// of the Service, not restarted.
+	readinessProbe := &corev1.Probe{
+		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(53)},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       10,
+	}
+	livenessProbe := &corev1.Probe{
 		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(5380)},
 		InitialDelaySeconds: 10,
 		PeriodSeconds:       10,
@@ -1171,8 +1183,8 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string)
 						{Name: "varlog", MountPath: "/var/log/technitium"},
 						{Name: "tmp", MountPath: "/tmp"},
 					},
-					ReadinessProbe:  probe,
-					LivenessProbe:   probe,
+					ReadinessProbe:  readinessProbe,
+					LivenessProbe:   livenessProbe,
 					SecurityContext: containerSecurityContext,
 				},
 			},
