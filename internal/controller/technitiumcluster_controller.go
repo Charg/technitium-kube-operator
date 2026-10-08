@@ -781,13 +781,27 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 			return false, fmt.Errorf("initializing cluster on primary of %s: %w", tc.Name, err)
 		}
 		log.Info("Initialized Technitium cluster on primary", "cluster", tc.Name)
+
+		// Init renames the primary to "<first label>.<clusterDomain>", so
+		// its pre-init name says nothing about what secondaries must join.
+		primaryState, err = primaryClient.GetClusterState(ctx)
+		if err != nil {
+			return false, fmt.Errorf("reading cluster state of primary of %s after init: %w", tc.Name, err)
+		}
 	}
 
 	// primaryNodeUrl must be the primary's domain name, not an IP: Technitium
 	// stores it as the node's address in the cluster config. The actual join
 	// dial target is primaryNodeIpAddress below, which is why the domain
-	// here can be unresolvable.
-	primaryURL := fmt.Sprintf("https://%s-0.%s:53443/", tc.Name, clusterDomainFor(tc))
+	// here can be unresolvable. The primary's own reported name is used
+	// rather than one
+	// derived from spec, since a primary initialized with an older pod
+	// template may carry a different name.
+	primaryName := primaryState.DNSServerDomain
+	if primaryName == "" {
+		primaryName = fmt.Sprintf("%s-0.%s", tc.Name, clusterDomainFor(tc))
+	}
+	primaryURL := fmt.Sprintf("https://%s:53443/", primaryName)
 
 	allJoined := true
 	for i := int32(1); i < desiredReplicas; i++ {
@@ -997,7 +1011,7 @@ func (r *TechnitiumClusterReconciler) reconcileClientService(ctx context.Context
 			return err
 		}
 		svc.Labels = commonLabels(tc.Name)
-		svc.Annotations = tc.Spec.Service.Annotations
+		applyManagedAnnotations(svc, tc.Spec.Service.Annotations)
 		if tc.Spec.Service.Type != "" {
 			svc.Spec.Type = tc.Spec.Service.Type
 		}
@@ -1138,7 +1152,21 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string)
 		// or logs.
 		{Name: "DNS_SERVER_ADMIN_PASSWORD_FILE", Value: "/etc/technitium/admin/password"},
 	}
-	if tc.Spec.DNSServerDomain != "" {
+	switch {
+	case desiredReplicaCount(tc) > 1:
+		// Technitium names a cluster node "<first label of its server
+		// domain>.<clusterDomain>" at init/join and refuses a join whose name
+		// is already taken, so every replica needs a distinct first label.
+		// Each pod gets "<pod>.<clusterDomain>", which is already the name
+		// Technitium settles on, so init has nothing to rename and the
+		// primary ends up at the "<name>-0" host the join URL expects.
+		env = append(env,
+			corev1.EnvVar{Name: "POD_NAME", ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.name"},
+			}},
+			corev1.EnvVar{Name: "DNS_SERVER_DOMAIN", Value: "$(POD_NAME)." + clusterDomainFor(tc)},
+		)
+	case tc.Spec.DNSServerDomain != "":
 		env = append(env, corev1.EnvVar{Name: "DNS_SERVER_DOMAIN", Value: tc.Spec.DNSServerDomain})
 	}
 
@@ -1417,7 +1445,8 @@ func roleForOrdinal(ordinal int32) string {
 // exact comparison.
 func findClusterMember(nodes []technitium.ClusterNode, podName string) *technitium.ClusterNode {
 	for i := range nodes {
-		if strings.HasPrefix(nodes[i].Name, podName) {
+		// Matched on the first label, so "dns-1" never claims "dns-10.…".
+		if strings.HasPrefix(nodes[i].Name, podName+".") {
 			return &nodes[i]
 		}
 	}

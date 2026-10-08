@@ -33,7 +33,9 @@ const clusteredClusterName = "e2e-dns-cluster"
 // resource reports Ready with every node connected. A real Technitium
 // cluster runs here, so a Ready status with status.members == "N/N" proves
 // the operator drove actual server-to-server clustering, not just N
-// independent standalone instances.
+// independent standalone instances. dnsServerDomain is set because one shared
+// server domain once gave every node the same Technitium node name, so every
+// join after the first was refused.
 func deployClusteredTechnitiumCluster(name string, replicas int) {
 	manifest := fmt.Sprintf(`
 apiVersion: dns.packet.fail/v1alpha1
@@ -43,6 +45,7 @@ metadata:
 spec:
   image: technitium/dns-server:15.4.0
   replicas: %d
+  dnsServerDomain: dns.e2e.test
   storage:
     size: 1Gi
 `, name, replicas)

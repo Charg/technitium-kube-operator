@@ -334,6 +334,63 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			})
 		})
 
+		Context("server domain", func() {
+			// envByName reconciles the CR and returns the dns-server
+			// container's env vars by name plus their positions, since a
+			// $(VAR) reference only expands against a variable defined
+			// earlier in the list.
+			envByName := func() (map[string]corev1.EnvVar, map[string]int) {
+				_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+				Expect(err).NotTo(HaveOccurred())
+
+				var sts appsv1.StatefulSet
+				Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+				vars := map[string]corev1.EnvVar{}
+				index := map[string]int{}
+				for i, e := range sts.Spec.Template.Spec.Containers[0].Env {
+					vars[e.Name] = e
+					index[e.Name] = i
+				}
+				return vars, index
+			}
+
+			It("passes spec.dnsServerDomain through unchanged on a single replica", func() {
+				createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+					cr.Spec.DNSServerDomain = "dns.example.com"
+				})
+				env, _ := envByName()
+				Expect(env).To(HaveKeyWithValue("DNS_SERVER_DOMAIN", HaveField("Value", "dns.example.com")))
+			})
+
+			It("gives every replica its own server domain under the cluster domain when replicas > 1", func() {
+				// Technitium names a cluster node "<first label of its server
+				// domain>.<clusterDomain>" and refuses a join whose name is
+				// already taken, so one domain shared by every pod can never
+				// form a cluster.
+				createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+					cr.Spec.Replicas = ptr.To(int32(3))
+					cr.Spec.DNSServerDomain = "dns.example.com"
+				})
+				env, index := envByName()
+				Expect(env).To(HaveKeyWithValue("DNS_SERVER_DOMAIN", HaveField("Value", "$(POD_NAME).dns.example.com")))
+				Expect(env).To(HaveKey("POD_NAME"))
+				Expect(env["POD_NAME"].ValueFrom).NotTo(BeNil())
+				Expect(env["POD_NAME"].ValueFrom.FieldRef).NotTo(BeNil())
+				Expect(env["POD_NAME"].ValueFrom.FieldRef.FieldPath).To(Equal("metadata.name"))
+				Expect(index["POD_NAME"]).To(BeNumerically("<", index["DNS_SERVER_DOMAIN"]))
+			})
+
+			It("uses spec.clusterDomain for the per-replica server domain when it is set", func() {
+				createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+					cr.Spec.Replicas = ptr.To(int32(2))
+					cr.Spec.DNSServerDomain = "dns.example.com"
+					cr.Spec.ClusterDomain = "nodes.internal"
+				})
+				env, _ := envByName()
+				Expect(env).To(HaveKeyWithValue("DNS_SERVER_DOMAIN", HaveField("Value", "$(POD_NAME).nodes.internal")))
+			})
+		})
+
 		It("never regenerates an existing admin password", func() {
 			createClusterCR(nil)
 			r := newReconciler()

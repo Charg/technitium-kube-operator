@@ -42,6 +42,8 @@ type fakeClusterState struct {
 	secondaryJoined    bool
 	initCalls          int
 	joinCalls          int
+	// joinPrimaryURL is the primaryNodeUrl of the last initJoin call.
+	joinPrimaryURL string
 	// secondaryStaysUnknown models the real gap between a secondary's initJoin
 	// returning success (secondaryJoined) and the primary establishing its
 	// heartbeat to it: while set, the primary lists the joined secondary in
@@ -89,7 +91,12 @@ func (f *fakeClusterNode) GetClusterState(ctx context.Context) (*technitium.Clus
 		}
 		nodes = append(nodes, secondary)
 	}
-	return &technitium.ClusterState{ClusterInitialized: true, ClusterDomain: "cluster.local", Nodes: nodes}, nil
+	return &technitium.ClusterState{
+		ClusterInitialized: true,
+		DNSServerDomain:    nodes[0].Name,
+		ClusterDomain:      "cluster.local",
+		Nodes:              nodes,
+	}, nil
 }
 
 func (f *fakeClusterNode) InitCluster(ctx context.Context, opts technitium.InitClusterOptions) (*technitium.ClusterState, error) {
@@ -104,6 +111,7 @@ func (f *fakeClusterNode) InitJoinCluster(ctx context.Context, opts technitium.I
 	f.shared.mu.Lock()
 	defer f.shared.mu.Unlock()
 	f.shared.joinCalls++
+	f.shared.joinPrimaryURL = opts.PrimaryNodeURL
 	f.shared.secondaryJoined = true
 	return &technitium.ClusterState{ClusterInitialized: true}, nil
 }
@@ -271,6 +279,26 @@ var _ = Describe("TechnitiumCluster Controller clustering", func() {
 			Expect(cr.Status.Nodes[1].Role).To(Equal("Secondary"))
 			Expect(cr.Status.Nodes[1].State).To(Equal("Connected"))
 			Expect(cr.Status.Nodes[1].LastSynced).NotTo(BeNil())
+		})
+
+		It("joins secondaries at the name the primary reports after init", func() {
+			// Init renames the primary to "<first label>.<clusterDomain>",
+			// which is "cluster.local" in the fake, not the "<name>.local"
+			// the operator would derive for this spec. The join URL must
+			// follow the primary's own name, or a primary that was renamed
+			// differently than predicted is unreachable to secondaries.
+			createClusterCR()
+			r := newReconciler()
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			createPod(0, "10.0.0.1")
+			createPod(1, "10.0.0.2")
+			markStatefulSetReady(2)
+
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(shared.joinPrimaryURL).To(Equal(fmt.Sprintf("https://%s-0.cluster.local:53443/", resourceName)))
 		})
 
 		It("stays in Clustering until the primary reports the secondary Connected, not merely joined", func() {

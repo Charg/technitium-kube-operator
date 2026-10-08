@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,7 +32,41 @@ const (
 	serviceRoleReplica = "replica"
 	// podNameLabel is set by the StatefulSet controller on every pod.
 	podNameLabel = "statefulset.kubernetes.io/pod-name"
+	// managedAnnotationsKey lists, comma-separated, the annotation keys the
+	// operator last applied from spec, so a key later dropped from spec can
+	// be removed without touching keys other controllers own.
+	managedAnnotationsKey = "dns.packet.fail/managed-annotations"
 )
+
+// applyManagedAnnotations sets desired on obj and removes the keys it set on
+// a previous pass that desired no longer has, leaving every other annotation
+// alone. Replacing the map outright would strip annotations other
+// controllers write onto the same object, such as MetalLB's
+// ip-allocated-from-pool; the controller writing it back then retriggers this
+// reconcile, and the two loop forever.
+func applyManagedAnnotations(obj metav1.Object, desired map[string]string) {
+	annotations := maps.Clone(obj.GetAnnotations())
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	if previous := annotations[managedAnnotationsKey]; previous != "" {
+		for key := range strings.SplitSeq(previous, ",") {
+			if _, ok := desired[key]; !ok {
+				delete(annotations, key)
+			}
+		}
+	}
+	delete(annotations, managedAnnotationsKey)
+
+	maps.Copy(annotations, desired)
+	if len(desired) > 0 {
+		annotations[managedAnnotationsKey] = strings.Join(slices.Sorted(maps.Keys(desired)), ",")
+	}
+	if len(annotations) == 0 {
+		annotations = nil
+	}
+	obj.SetAnnotations(annotations)
+}
 
 // replicaServiceName is the per-replica Service name for an ordinal.
 func replicaServiceName(clusterName string, ordinal int32) string {
@@ -121,7 +156,7 @@ func (r *TechnitiumClusterReconciler) reconcileReplicaServices(ctx context.Conte
 				labels := commonLabels(tc.Name)
 				labels[serviceRoleLabel] = serviceRoleReplica
 				svc.Labels = labels
-				svc.Annotations = replicaServiceAnnotations(spec, ordinal)
+				applyManagedAnnotations(svc, replicaServiceAnnotations(spec, ordinal))
 				svc.Spec.Type = svcType
 				svc.Spec.ExternalTrafficPolicy = policy
 				selector := instanceLabels(tc.Name)
