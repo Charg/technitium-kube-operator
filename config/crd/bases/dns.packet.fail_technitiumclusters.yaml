@@ -1051,6 +1051,32 @@ spec:
                   nodeSelector restricts the Technitium pods to nodes carrying all of the
                   given labels.
                 type: object
+              podDisruptionBudget:
+                description: |-
+                  podDisruptionBudget configures the PodDisruptionBudget the operator
+                  creates when replicas is greater than 1, so a node drain cannot evict
+                  several resolvers at once. Unset behaves as enabled with maxUnavailable 1.
+                properties:
+                  enabled:
+                    default: true
+                    description: |-
+                      enabled controls whether the operator manages a PodDisruptionBudget. It
+                      defaults to true, and the budget only exists while replicas is greater
+                      than 1. Set it to false only if you manage your own PodDisruptionBudget
+                      for these pods: two budgets selecting the same pods make the eviction API
+                      refuse every eviction, so node drains hang. Setting it to false also
+                      deletes a budget the operator created earlier.
+                    type: boolean
+                  maxUnavailable:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 1
+                    description: |-
+                      maxUnavailable is the number or percentage of Technitium pods that may be
+                      voluntarily disrupted at once, for example by a node drain. Defaults to 1.
+                    x-kubernetes-int-or-string: true
+                type: object
               priorityClassName:
                 description: priorityClassName sets the PriorityClass of the Technitium
                   pods.
