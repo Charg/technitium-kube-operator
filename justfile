@@ -162,12 +162,10 @@ docker-push tag=img:
 docker-buildx tag=img:
     #!/usr/bin/env bash
     set -euo pipefail
-    sed -e '1 s/\(^FROM\)/FROM --platform=${BUILDPLATFORM}/; t' -e ' 1,// s//FROM --platform=${BUILDPLATFORM}/' Dockerfile > Dockerfile.cross
     "{{ container_tool }}" buildx create --name technitium-operator-builder || true
     "{{ container_tool }}" buildx use technitium-operator-builder
-    "{{ container_tool }}" buildx build --push --platform="{{ platforms }}" --tag "{{ tag }}" -f Dockerfile.cross . || true
+    "{{ container_tool }}" buildx build --push --platform="{{ platforms }}" --tag "{{ tag }}" . || true
     "{{ container_tool }}" buildx rm technitium-operator-builder || true
-    rm Dockerfile.cross
 
 # Generate a consolidated YAML with CRDs and deployment
 [group('Build')]
