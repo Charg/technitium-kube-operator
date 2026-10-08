@@ -2,7 +2,7 @@ apiVersion: v2
 name: technitium-operator
 description: A Kubernetes operator for managing Technitium DNS servers
 type: application
-version: 1.0.0
+version: 1.0.1
 appVersion: 0.1.0
 home: https://github.com/Charg/technitium-kube-operator
 sources:
