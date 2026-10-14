@@ -170,6 +170,8 @@ technitium_dns_queries_by_source_last_hour{source="blocked"}
 
 Set `--technitium-stats-interval` (default `60s`) to change how often nodes are polled, or `0` to disable the collector.
 
+A ready-made Grafana dashboard for these metrics, plus the operator's own reconcile metrics, is in [`grafana/technitium-dns.json`](grafana/technitium-dns.json). Import it through **Dashboards → New → Import** and pick your Prometheus data source.
+
 ## Getting Started
 
 ### Prerequisites
