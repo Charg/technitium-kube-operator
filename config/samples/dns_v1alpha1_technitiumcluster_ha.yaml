@@ -38,3 +38,8 @@ spec:
   #       - ordinal: 2
   #         annotations:
   #           metallb.io/loadBalancerIPs: 192.168.1.52
+  #   # A Service for the web console that targets only the Primary; put the
+  #   # Ingress in front of this one. Sessions are per replica, so the
+  #   # load-balanced client Service logs the console out.
+  #   primary:
+  #     enabled: true
