@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/Charg/technitium-kube-operator/compare/v1.0.3...v1.1.0) (2026-10-14)
+
+
+### Features
+
+* **cluster:** add an optional Service that targets only the Primary ([#108](https://github.com/Charg/technitium-kube-operator/issues/108)) ([a200513](https://github.com/Charg/technitium-kube-operator/commit/a2005138e945a8e6a129387df3aad911f35c5280))
+
 ## [1.0.3](https://github.com/Charg/technitium-kube-operator/compare/v1.0.2...v1.0.3) (2026-10-08)
 
 
