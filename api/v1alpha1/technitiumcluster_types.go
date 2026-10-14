@@ -134,7 +134,8 @@ type TechnitiumClusterStorageSpec struct {
 }
 
 // TechnitiumClusterServiceSpec configures the client Service that fronts the
-// Technitium instance, and optionally one Service per replica.
+// Technitium instance, and optionally one Service per replica and one that
+// selects only the Primary.
 // +kubebuilder:validation:XValidation:rule="!has(self.externalTrafficPolicy) || (has(self.type) ? self.type : 'ClusterIP') in ['LoadBalancer', 'NodePort']",message="externalTrafficPolicy may only be set when type is LoadBalancer or NodePort"
 type TechnitiumClusterServiceSpec struct {
 	// type is the Kubernetes Service type.
@@ -175,6 +176,42 @@ type TechnitiumClusterServiceSpec struct {
 	// them; scaling down deletes the Services of the removed ordinals.
 	// +optional
 	PerReplica *TechnitiumClusterPerReplicaServiceSpec `json:"perReplica,omitempty"`
+
+	// primary configures an additional Service, named "<cluster name>-primary",
+	// that selects only the Primary replica and exposes the web/API port
+	// (5380) alone. Point an Ingress for the web console at it: Technitium
+	// keeps login sessions per replica, so a console reached through the
+	// load-balanced client Service logs out as soon as a request lands on a
+	// replica that did not issue the session. Config edits belong on the
+	// Primary anyway, since the Secondaries copy from it.
+	// +optional
+	Primary *TechnitiumClusterPrimaryServiceSpec `json:"primary,omitempty"`
+}
+
+// TechnitiumClusterPrimaryServiceSpec configures the Service that selects only
+// the Primary replica.
+// +kubebuilder:validation:XValidation:rule="!has(self.externalTrafficPolicy) || (has(self.type) ? self.type : 'ClusterIP') in ['LoadBalancer', 'NodePort']",message="externalTrafficPolicy may only be set when type is LoadBalancer or NodePort"
+type TechnitiumClusterPrimaryServiceSpec struct {
+	// enabled creates the primary Service when true. Setting it to false, or
+	// removing the primary block, deletes it.
+	Enabled bool `json:"enabled"`
+
+	// type is the Kubernetes Service type of the primary Service. The default,
+	// ClusterIP, suits an Ingress in front of it.
+	// +kubebuilder:default=ClusterIP
+	// +optional
+	Type corev1.ServiceType `json:"type,omitempty"`
+
+	// externalTrafficPolicy is applied to the primary Service. It may only be
+	// set when type is LoadBalancer or NodePort.
+	// +kubebuilder:validation:Enum=Cluster;Local
+	// +optional
+	ExternalTrafficPolicy corev1.ServiceExternalTrafficPolicy `json:"externalTrafficPolicy,omitempty"`
+
+	// annotations are copied onto the primary Service. Annotations other
+	// controllers add to it are left alone.
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
 }
 
 // TechnitiumClusterPerReplicaServiceSpec configures the Services created one
@@ -418,6 +455,12 @@ type TechnitiumClusterStatus struct {
 	// lands on a Secondary.
 	// +optional
 	PrimaryEndpoint string `json:"primaryEndpoint,omitempty"`
+
+	// primaryService is the name of the Service, in the operator's namespace,
+	// that selects only the Primary replica. It is set while
+	// spec.service.primary is enabled and empty otherwise.
+	// +optional
+	PrimaryService string `json:"primaryService,omitempty"`
 
 	// observedGeneration is the .metadata.generation the controller last
 	// reconciled. A value behind .metadata.generation means the observed state

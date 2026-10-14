@@ -259,7 +259,8 @@ func (r *TechnitiumClusterReconciler) nodeClientFactory() func(endpoint, usernam
 // headless Service governing the StatefulSet gives each pod a stable DNS name
 // of "<sts>-<ordinal>.<headless-service>", unlike the client Service's
 // endpoint, which load-balances across whichever pod happens to answer.
-// Ordinal 0 is the Primary, so bootstrap and every serverRef write target it.
+// The Primary is primaryOrdinal, so bootstrap and every serverRef write target
+// it.
 func nodeEndpoint(clusterName string, ordinal int32, namespace string) string {
 	return fmt.Sprintf("http://%s-%d.%s.%s.svc:5380", clusterName, ordinal, headlessServiceName(clusterName), namespace)
 }
@@ -343,7 +344,7 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		// Mint the token on the Primary: the client Service would pick
 		// whichever pod answers, and every serverRef resolver talks to the
 		// Primary with it.
-		bootstrapped, err = r.ensureToken(ctx, &tc, nodeEndpoint(tc.Name, 0, r.OperatorNamespace))
+		bootstrapped, err = r.ensureToken(ctx, &tc, nodeEndpoint(tc.Name, primaryOrdinal, r.OperatorNamespace))
 		if err != nil {
 			log.Error(err, "Failed to bootstrap TechnitiumCluster admin token", "cluster", tc.Name)
 			if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
@@ -441,7 +442,7 @@ func (r *TechnitiumClusterReconciler) teardownClusterState(ctx context.Context, 
 		return
 	}
 
-	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, 0, r.OperatorNamespace), username, password)
+	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, primaryOrdinal, r.OperatorNamespace), username, password)
 	if err != nil {
 		log.Info("Skipping in-Technitium cluster teardown: building primary node client failed",
 			"cluster", tc.Name, "error", err.Error())
@@ -756,7 +757,7 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 		return false, nil
 	}
 
-	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, 0, r.OperatorNamespace), username, password)
+	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, primaryOrdinal, r.OperatorNamespace), username, password)
 	if err != nil {
 		return false, fmt.Errorf("building node client for primary of %s: %w", tc.Name, err)
 	}
@@ -897,6 +898,9 @@ func (r *TechnitiumClusterReconciler) reconcileWorkload(ctx context.Context, tc 
 	}
 	if err := r.reconcileReplicaServices(ctx, tc); err != nil {
 		return nil, fmt.Errorf("reconciling per-replica services: %w", err)
+	}
+	if err := r.reconcilePrimaryService(ctx, tc); err != nil {
+		return nil, fmt.Errorf("reconciling primary service: %w", err)
 	}
 	// A caller-supplied adminSecretRef means the credentials are managed
 	// outside this controller; generating one anyway would fight whatever
@@ -1051,9 +1055,14 @@ func dnsServicePorts(withAPI bool) []corev1.ServicePort {
 		{Name: "dns-tcp", Port: 53, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(53)},
 	}
 	if withAPI {
-		ports = append(ports, corev1.ServicePort{Name: "api", Port: 5380, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(5380)})
+		ports = append(ports, apiServicePort())
 	}
 	return ports
+}
+
+// apiServicePort is the Technitium web/API port as a Service port.
+func apiServicePort() corev1.ServicePort {
+	return corev1.ServicePort{Name: "api", Port: 5380, Protocol: corev1.ProtocolTCP, TargetPort: intstr.FromInt32(5380)}
 }
 
 // reconcileAdminSecret ensures the generated admin credentials Secret exists.
@@ -1330,8 +1339,16 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 		tc.Status.Endpoint = endpoint
 		changed = true
 	}
-	if primaryEndpoint := nodeEndpoint(tc.Name, 0, r.OperatorNamespace); tc.Status.PrimaryEndpoint != primaryEndpoint {
+	if primaryEndpoint := nodeEndpoint(tc.Name, primaryOrdinal, r.OperatorNamespace); tc.Status.PrimaryEndpoint != primaryEndpoint {
 		tc.Status.PrimaryEndpoint = primaryEndpoint
+		changed = true
+	}
+	primaryService := ""
+	if p := tc.Spec.Service.Primary; p != nil && p.Enabled {
+		primaryService = primaryServiceName(tc.Name)
+	}
+	if tc.Status.PrimaryService != primaryService {
+		tc.Status.PrimaryService = primaryService
 		changed = true
 	}
 	if tc.Status.ReadyReplicas != readyReplicas {
@@ -1570,7 +1587,7 @@ func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc 
 func (r *TechnitiumClusterReconciler) buildNodeStatusesFromPrimary(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, username, password string, desiredReplicas int32) ([]dnsv1alpha1.TechnitiumClusterNodeStatus, string, bool) {
 	log := logf.FromContext(ctx)
 
-	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, 0, r.OperatorNamespace), username, password)
+	primaryClient, err := r.nodeClientFactory()(nodeEndpoint(tc.Name, primaryOrdinal, r.OperatorNamespace), username, password)
 	if err != nil {
 		return nil, "", false
 	}

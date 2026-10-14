@@ -381,4 +381,150 @@ var _ = Describe("TechnitiumCluster Controller Service options", func() {
 			mustGetService(headlessServiceName(resourceName))
 		})
 	})
+
+	Context("primary Service", func() {
+		It("creates an API-only ClusterIP Service that selects only the Primary pod", func() {
+			createCluster(3, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				Primary: &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{Enabled: true},
+			})
+			reconcileOnce()
+
+			svc := mustGetService(resourceName + "-primary")
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+			Expect(svc.Spec.Selector).To(Equal(map[string]string{
+				"app.kubernetes.io/name":             "technitium",
+				"app.kubernetes.io/instance":         resourceName,
+				"statefulset.kubernetes.io/pod-name": resourceName + "-0",
+			}))
+			Expect(svc.Spec.Ports).To(HaveLen(1))
+			Expect(svc.Spec.Ports[0].Name).To(Equal("api"))
+			Expect(svc.Spec.Ports[0].Port).To(Equal(int32(5380)))
+			Expect(svc.Spec.Ports[0].Protocol).To(Equal(corev1.ProtocolTCP))
+			Expect(svc.Labels).To(HaveKeyWithValue("app.kubernetes.io/managed-by", "technitium-operator"))
+			Expect(svc.OwnerReferences).To(HaveLen(1))
+			Expect(*svc.OwnerReferences[0].Controller).To(BeTrue())
+		})
+
+		It("rejects externalTrafficPolicy on a ClusterIP primary Service", func() {
+			err := k8sClient.Create(ctx, &dnsv1alpha1.TechnitiumCluster{
+				Name: "svc-cel-reject-primary",
+				Spec: dnsv1alpha1.TechnitiumClusterSpec{
+					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: resource.MustParse("1Gi")},
+					Service: dnsv1alpha1.TechnitiumClusterServiceSpec{
+						Primary: &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{
+							Enabled:               true,
+							ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyLocal,
+						},
+					},
+				},
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("externalTrafficPolicy may only be set when type is LoadBalancer or NodePort"))
+		})
+
+		It("reports the Service name in status while enabled", func() {
+			createCluster(1, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				Primary: &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{Enabled: true},
+			})
+			reconcileOnce()
+
+			var cr dnsv1alpha1.TechnitiumCluster
+			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+			Expect(cr.Status.PrimaryService).To(Equal(resourceName + "-primary"))
+
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) { s.Primary.Enabled = false })
+			reconcileOnce()
+			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+			Expect(cr.Status.PrimaryService).To(BeEmpty())
+		})
+
+		It("keeps annotations added by other controllers and removes only keys dropped from spec", func() {
+			createCluster(1, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				Primary: &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{
+					Enabled:     true,
+					Annotations: map[string]string{"common": "yes", "traefik.ingress.kubernetes.io/service.serversscheme": "http"},
+				},
+			})
+			reconcileOnce()
+
+			svc := mustGetService(resourceName + "-primary")
+			Expect(specAnnotations(svc)).To(Equal(map[string]string{
+				"common": "yes", "traefik.ingress.kubernetes.io/service.serversscheme": "http",
+			}))
+
+			svc.Annotations["argocd.argoproj.io/tracking-id"] = "technitium:/Service:dns/x"
+			Expect(k8sClient.Update(ctx, svc)).To(Succeed())
+			before := mustGetService(resourceName + "-primary").ResourceVersion
+
+			reconcileOnce()
+			svc = mustGetService(resourceName + "-primary")
+			Expect(svc.ResourceVersion).To(Equal(before))
+
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) {
+				delete(s.Primary.Annotations, "common")
+			})
+			reconcileOnce()
+
+			svc = mustGetService(resourceName + "-primary")
+			Expect(svc.Annotations).NotTo(HaveKey("common"))
+			Expect(svc.Annotations).To(HaveKeyWithValue("traefik.ingress.kubernetes.io/service.serversscheme", "http"))
+			Expect(svc.Annotations).To(HaveKeyWithValue("argocd.argoproj.io/tracking-id", "technitium:/Service:dns/x"))
+		})
+
+		It("honours an explicit type and policy, and clears the policy when the type goes back to ClusterIP", func() {
+			createCluster(1, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				Primary: &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{
+					Enabled:               true,
+					Type:                  corev1.ServiceTypeLoadBalancer,
+					ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyLocal,
+				},
+			})
+			reconcileOnce()
+
+			svc := mustGetService(resourceName + "-primary")
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeLoadBalancer))
+			Expect(svc.Spec.ExternalTrafficPolicy).To(Equal(corev1.ServiceExternalTrafficPolicyLocal))
+			// The allocated nodePort survives the next reconcile.
+			nodePort := svc.Spec.Ports[0].NodePort
+			Expect(nodePort).NotTo(BeZero())
+			reconcileOnce()
+			Expect(mustGetService(resourceName + "-primary").Spec.Ports[0].NodePort).To(Equal(nodePort))
+
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) {
+				s.Primary = &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{Enabled: true, Type: corev1.ServiceTypeClusterIP}
+			})
+			reconcileOnce()
+
+			svc = mustGetService(resourceName + "-primary")
+			Expect(svc.Spec.Type).To(Equal(corev1.ServiceTypeClusterIP))
+			Expect(svc.Spec.ExternalTrafficPolicy).To(BeEmpty())
+		})
+
+		It("deletes the Service when disabled or removed, but never an unowned one", func() {
+			createCluster(1, dnsv1alpha1.TechnitiumClusterServiceSpec{
+				Primary: &dnsv1alpha1.TechnitiumClusterPrimaryServiceSpec{Enabled: true},
+			})
+			reconcileOnce()
+			mustGetService(resourceName + "-primary")
+
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) { s.Primary.Enabled = false })
+			reconcileOnce()
+			_, err := getService(resourceName + "-primary")
+			Expect(apierrors.IsNotFound(err)).To(BeTrue())
+
+			// Someone else's Service that happens to have the name.
+			unowned := &corev1.Service{
+				Namespace: namespace,
+				Name:      resourceName + "-primary",
+				Spec:      corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 80, Protocol: corev1.ProtocolTCP}}},
+			}
+			Expect(k8sClient.Create(ctx, unowned)).To(Succeed())
+			updateService(func(s *dnsv1alpha1.TechnitiumClusterServiceSpec) { s.Primary = nil })
+			reconcileOnce()
+			mustGetService(resourceName + "-primary")
+			// The client and headless Services are untouched.
+			mustGetService(resourceName)
+			mustGetService(headlessServiceName(resourceName))
+		})
+	})
 })

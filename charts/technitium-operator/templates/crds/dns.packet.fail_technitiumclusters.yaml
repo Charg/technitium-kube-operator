@@ -1266,6 +1266,50 @@ spec:
                         LoadBalancer or NodePort
                       rule: '!has(self.externalTrafficPolicy) || (has(self.type) ?
                         self.type : ''LoadBalancer'') in [''LoadBalancer'', ''NodePort'']'
+                  primary:
+                    description: |-
+                      primary configures an additional Service, named "<cluster name>-primary",
+                      that selects only the Primary replica and exposes the web/API port
+                      (5380) alone. Point an Ingress for the web console at it: Technitium
+                      keeps login sessions per replica, so a console reached through the
+                      load-balanced client Service logs out as soon as a request lands on a
+                      replica that did not issue the session. Config edits belong on the
+                      Primary anyway, since the Secondaries copy from it.
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          annotations are copied onto the primary Service. Annotations other
+                          controllers add to it are left alone.
+                        type: object
+                      enabled:
+                        description: |-
+                          enabled creates the primary Service when true. Setting it to false, or
+                          removing the primary block, deletes it.
+                        type: boolean
+                      externalTrafficPolicy:
+                        description: |-
+                          externalTrafficPolicy is applied to the primary Service. It may only be
+                          set when type is LoadBalancer or NodePort.
+                        enum:
+                        - Cluster
+                        - Local
+                        type: string
+                      type:
+                        default: ClusterIP
+                        description: |-
+                          type is the Kubernetes Service type of the primary Service. The default,
+                          ClusterIP, suits an Ingress in front of it.
+                        type: string
+                    required:
+                    - enabled
+                    type: object
+                    x-kubernetes-validations:
+                    - message: externalTrafficPolicy may only be set when type is
+                        LoadBalancer or NodePort
+                      rule: '!has(self.externalTrafficPolicy) || (has(self.type) ?
+                        self.type : ''ClusterIP'') in [''LoadBalancer'', ''NodePort'']'
                   type:
                     default: ClusterIP
                     description: type is the Kubernetes Service type.
@@ -1691,6 +1735,12 @@ spec:
                   Service. Resources that write to this instance (Zone, Record,
                   Blocklist and the rest) send their API calls here, so a write never
                   lands on a Secondary.
+                type: string
+              primaryService:
+                description: |-
+                  primaryService is the name of the Service, in the operator's namespace,
+                  that selects only the Primary replica. It is set while
+                  spec.service.primary is enabled and empty otherwise.
                 type: string
               readyReplicas:
                 description: |-

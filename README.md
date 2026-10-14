@@ -25,6 +25,7 @@ spec:
 - `externalTrafficPolicy` (`Cluster` or `Local`): `Local` preserves client source IPs in query logs. Only valid for type `LoadBalancer` or `NodePort`.
 - `exposeAPI` (default `true`): when `false` the client Service publishes DNS (53 UDP and TCP) only, keeping the plain-HTTP admin API (5380) off the Service address. The operator is unaffected because it reaches the API through the headless Service, which always keeps 5380. `status.endpoint` is then the DNS address `<name>.<namespace>.svc:53` rather than an HTTP URL.
 - `perReplica`: creates one Service per StatefulSet ordinal, named `<name>-<ordinal>`, selecting only that pod and exposing DNS only (never 5380). Its `type` defaults to `LoadBalancer` and its `externalTrafficPolicy` to `Local` (for `LoadBalancer` and `NodePort`). `annotations` apply to every per-replica Service, and `ordinals[].annotations` are merged over them for one ordinal, which is how each replica is pinned to its own address. Scaling down deletes the Services of the removed ordinals, and removing `perReplica` deletes them all. Only Services owned by the cluster are ever deleted.
+- `primary`: with `enabled: true`, creates a Service named `<name>-primary` that selects only the Primary pod and exposes the web/API port (5380) alone. Point an Ingress for the web console here rather than at the client Service: Technitium keeps login sessions per replica, so with several replicas a console behind the load-balanced client Service logs you out as soon as a request lands on a replica that did not issue your session. Its `type` defaults to `ClusterIP`; `externalTrafficPolicy` and `annotations` work as on the client Service, and annotations other controllers add are left alone. `status.primaryService` names the Service while it is enabled. Disabling or removing `primary` deletes it if the cluster owns it.
 
 A MetalLB homelab with one stable LAN IP per replica, source IPs preserved, and the admin API kept off the LAN:
 
@@ -71,6 +72,7 @@ As a result:
 - A zone reaches the Secondaries only if it is a member of the cluster's catalog zone. A `Primary`, `Secondary`, `Stub` or `Forwarder` `Zone` joins `cluster-catalog.<clusterDomain>` automatically. Set `spec.catalog: ""` to keep a zone on the Primary only (this removes it from any catalog, and queries that land on a Secondary fail for it), or name another catalog to override. Scaling back to one replica leaves existing membership in place.
 - Global settings (`ServerSettings`, block list URLs) and allowed/blocked entries sync to the Secondaries.
 - DHCP scopes are per node and do not sync. A `DHCPScope` is configured on the Primary only.
+- The web console has the same constraint: reach it through the `<name>-primary` Service (`spec.service.primary`), which also keeps console edits on the Primary. It is unavailable while `<name>-0` is down.
 
 ### Deletion and PVC retention
 

@@ -36,7 +36,70 @@ const (
 	// operator last applied from spec, so a key later dropped from spec can
 	// be removed without touching keys other controllers own.
 	managedAnnotationsKey = "dns.packet.fail/managed-annotations"
+	// primaryOrdinal is the StatefulSet ordinal that bootstraps the
+	// Technitium cluster and so holds the Primary role. Everything that must
+	// reach the Primary, API writes and the primary Service alike, derives
+	// from it.
+	primaryOrdinal int32 = 0
 )
+
+// primaryServiceName is the name of the Service that selects only the Primary.
+func primaryServiceName(clusterName string) string { return clusterName + "-primary" }
+
+// reconcilePrimaryService ensures the API-only Service that selects just the
+// Primary pod when spec.service.primary is enabled, and deletes it, if this
+// cluster owns it, when it is disabled or unset.
+func (r *TechnitiumClusterReconciler) reconcilePrimaryService(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) error {
+	log := logf.FromContext(ctx)
+	spec := tc.Spec.Service.Primary
+	svc := &corev1.Service{Name: primaryServiceName(tc.Name), Namespace: r.OperatorNamespace}
+
+	if spec == nil || !spec.Enabled {
+		if err := r.Get(ctx, client.ObjectKeyFromObject(svc), svc); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		// Only a Service this cluster controls is ever deleted: the name
+		// alone could be someone else's.
+		if !metav1.IsControlledBy(svc, tc) {
+			return nil
+		}
+		if err := r.Delete(ctx, svc); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting Service %s: %w", svc.Name, err)
+		}
+		log.Info("Deleted primary Service", "name", svc.Name)
+		return nil
+	}
+
+	svcType := spec.Type
+	if svcType == "" {
+		svcType = corev1.ServiceTypeClusterIP
+	}
+	policy := corev1.ServiceExternalTrafficPolicy("")
+	if serviceTypeSupportsTrafficPolicy(svcType) {
+		policy = spec.ExternalTrafficPolicy
+	}
+	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, svc, func() error {
+		if err := controllerutil.SetControllerReference(tc, svc, r.Scheme); err != nil {
+			return err
+		}
+		svc.Labels = commonLabels(tc.Name)
+		applyManagedAnnotations(svc, spec.Annotations)
+		svc.Spec.Type = svcType
+		svc.Spec.ExternalTrafficPolicy = policy
+		selector := instanceLabels(tc.Name)
+		selector[podNameLabel] = fmt.Sprintf("%s-%d", tc.Name, primaryOrdinal)
+		svc.Spec.Selector = selector
+		svc.Spec.Ports = preserveNodePorts([]corev1.ServicePort{apiServicePort()}, svc.Spec.Ports)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("reconciling Service %s: %w", svc.Name, err)
+	}
+	if op != controllerutil.OperationResultNone {
+		log.Info("Reconciled primary Service", "name", svc.Name, "operation", op)
+	}
+	return nil
+}
 
 // applyManagedAnnotations sets desired on obj and removes the keys it set on
 // a previous pass that desired no longer has, leaving every other annotation
