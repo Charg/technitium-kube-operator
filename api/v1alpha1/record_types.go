@@ -121,6 +121,19 @@ type RecordStatus struct {
 	// Technitium server.
 	// +optional
 	RecordCreated bool `json:"recordCreated,omitempty"`
+
+	// appliedData is the spec.data the controller last wrote to the server.
+	// A Record is identified on the server by its name, type and data, so
+	// several Records can share one name and type. When spec.data changes,
+	// the record still carrying appliedData is the stale one to remove.
+	// +optional
+	AppliedData string `json:"appliedData,omitempty"`
+
+	// appliedPriority is the spec.priority the controller last wrote to the
+	// server, for MX records. It completes appliedData as the identity of the
+	// stale record to remove when the priority changes.
+	// +optional
+	AppliedPriority *int32 `json:"appliedPriority,omitempty"`
 }
 
 // +kubebuilder:object:root=true

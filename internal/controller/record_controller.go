@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -105,7 +106,7 @@ func (r *RecordReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	if err := r.markReady(ctx, req.NamespacedName); err != nil {
+	if err := r.markReady(ctx, req.NamespacedName, record.Spec); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -149,7 +150,7 @@ func (r *RecordReconciler) finalizeRecord(ctx context.Context, record *dnsv1alph
 		api, err := r.serverClientFor(ctx, record.Spec.ServerRef)
 		switch {
 		case err == nil:
-			if err := api.DeleteRecord(ctx, deleteOptionsFromSpec(record.Spec)); err != nil {
+			if err := api.DeleteRecord(ctx, deleteOptionsFromSpec(appliedSpec(record))); err != nil {
 				if !errors.Is(err, technitium.ErrRecordNotFound) {
 					return err
 				}
@@ -175,8 +176,15 @@ func (r *RecordReconciler) finalizeRecord(ctx context.Context, record *dnsv1alph
 
 // reconcileRecord brings the server-side record in line with the spec. It is
 // idempotent: an absent record is created, a present record with matching
-// rdata and TTL is a success, rdata drift is corrected by recreating the
-// record, and TTL-only drift is corrected in place.
+// TTL is a success, and TTL-only drift is corrected in place.
+//
+// A record is identified by its name, type and rdata (see findRecord), so
+// several Records can share one name and type. A changed spec.data therefore
+// shows up as an absent record: the desired one is added first and the stale
+// one, still carrying status.appliedData, is removed after, so the name keeps
+// resolving throughout. CNAME is the exception: a name holds at most one, so
+// any CNAME on the name is the managed one and differing rdata is corrected
+// by recreating it.
 func (r *RecordReconciler) reconcileRecord(ctx context.Context, record *dnsv1alpha1.Record) error {
 	log := logf.FromContext(ctx)
 	spec := record.Spec
@@ -191,7 +199,7 @@ func (r *RecordReconciler) reconcileRecord(ctx context.Context, record *dnsv1alp
 		return err
 	}
 
-	current := findRecordByType(records, spec.Type)
+	current := findRecord(records, spec)
 	if current == nil {
 		if err := api.AddRecord(ctx, addOptionsFromSpec(spec)); err != nil {
 			// A concurrent create (another replica, a manual action) races us
@@ -201,6 +209,14 @@ func (r *RecordReconciler) reconcileRecord(ctx context.Context, record *dnsv1alp
 			}
 		}
 		log.Info("Created Record", "name", spec.Name, "type", spec.Type)
+
+		if stale := findRecord(records, appliedSpec(record)); stale != nil {
+			if err := api.DeleteRecord(ctx, deleteOptionsFromCurrent(spec, stale)); err != nil && !errors.Is(err, technitium.ErrRecordNotFound) {
+				return err
+			}
+			log.Info("Deleted stale Record data after a spec change", "name", spec.Name, "type", spec.Type,
+				"data", record.Status.AppliedData)
+		}
 		return nil
 	}
 
@@ -229,17 +245,35 @@ func (r *RecordReconciler) reconcileRecord(ctx context.Context, record *dnsv1alp
 	return nil
 }
 
-// findRecordByType returns the first record of recordType in records, or nil
-// when none match. GetRecords is scoped to one domain name already; matching
-// by type on top of that is enough to identify "the" record a Record resource
-// manages, since a Record owns exactly one (name, type) pair.
-func findRecordByType(records []technitium.Record, recordType dnsv1alpha1.RecordType) *technitium.Record {
+// findRecord returns the server record a Record with spec manages, or nil when
+// there is none. GetRecords is scoped to one domain name already; on top of
+// that a record matches on type and rdata, so two Records with the same name
+// and type but different data (an RRset with several A records, say) each
+// find their own record rather than the first of the type. CNAME matches on
+// type alone, since a name holds at most one CNAME.
+func findRecord(records []technitium.Record, spec dnsv1alpha1.RecordSpec) *technitium.Record {
 	for i := range records {
-		if records[i].Type == string(recordType) {
+		if records[i].Type != string(spec.Type) {
+			continue
+		}
+		if spec.Type == dnsv1alpha1.RecordTypeCNAME || recordDataMatches(spec, &records[i]) {
 			return &records[i]
 		}
 	}
 	return nil
+}
+
+// appliedSpec returns record's spec with the rdata the controller last wrote
+// to the server (status.appliedData/appliedPriority) in place of the desired
+// rdata, identifying the record that is still on the server. Before anything
+// was applied it returns the spec unchanged.
+func appliedSpec(record *dnsv1alpha1.Record) dnsv1alpha1.RecordSpec {
+	spec := record.Spec
+	if record.Status.AppliedData != "" {
+		spec.Data = record.Status.AppliedData
+		spec.Priority = record.Status.AppliedPriority
+	}
+	return spec
 }
 
 // recordDataMatches reports whether current's rdata (and, for MX, priority)
@@ -312,7 +346,8 @@ func addOptionsFromSpec(spec dnsv1alpha1.RecordSpec) technitium.AddRecordOptions
 
 // deleteOptionsFromSpec maps a Record spec onto the delete-record parameters,
 // identifying the record to remove by the rdata the spec itself carries. Used
-// during finalization, where the spec is the only source of truth available.
+// during finalization with appliedSpec, so a Record deleted before a spec
+// change was reconciled removes the value actually on the server.
 func deleteOptionsFromSpec(spec dnsv1alpha1.RecordSpec) technitium.DeleteRecordOptions {
 	opts := technitium.DeleteRecordOptions{Zone: spec.Zone, Domain: spec.Name, Type: string(spec.Type)}
 	setRecordValue(&opts.RecordValue, spec)
@@ -340,9 +375,11 @@ func deleteOptionsFromCurrent(spec dnsv1alpha1.RecordSpec, current *technitium.R
 }
 
 // markReady re-fetches the Record and records a successful reconcile: Ready
-// True, Degraded and Progressing cleared. Re-fetching avoids writing status
-// onto a stale object that another writer has since changed.
-func (r *RecordReconciler) markReady(ctx context.Context, key client.ObjectKey) error {
+// True, Degraded and Progressing cleared, and applied's rdata as the value now
+// on the server. applied is the spec that was reconciled, not the re-fetched
+// one, which may already carry a newer change. Re-fetching avoids writing
+// status onto a stale object that another writer has since changed.
+func (r *RecordReconciler) markReady(ctx context.Context, key client.ObjectKey, applied dnsv1alpha1.RecordSpec) error {
 	var record dnsv1alpha1.Record
 	if err := r.Get(ctx, key, &record); err != nil {
 		return client.IgnoreNotFound(err)
@@ -364,6 +401,11 @@ func (r *RecordReconciler) markReady(ctx context.Context, key client.ObjectKey) 
 	}
 	if !record.Status.RecordCreated {
 		record.Status.RecordCreated = true
+		changed = true
+	}
+	if record.Status.AppliedData != applied.Data || !ptr.Equal(record.Status.AppliedPriority, applied.Priority) {
+		record.Status.AppliedData = applied.Data
+		record.Status.AppliedPriority = applied.Priority
 		changed = true
 	}
 	if !changed {
