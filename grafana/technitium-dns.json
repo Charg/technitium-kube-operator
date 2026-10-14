@@ -186,7 +186,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(technitium_dns_stats_scrape_success{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum(max by (cluster, node, result, source) (technitium_dns_stats_scrape_success{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "__auto",
           "refId": "A"
         }
@@ -250,7 +250,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "count(technitium_dns_stats_scrape_success{cluster=~\"$cluster\", node=~\"$node\"} == 0) or vector(0)",
+          "expr": "count(max by (cluster, node, result, source) (technitium_dns_stats_scrape_success{cluster=~\"$cluster\", node=~\"$node\"}) == 0) or vector(0)",
           "legendFormat": "__auto",
           "refId": "A"
         }
@@ -310,7 +310,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum(max by (cluster, node, result, source) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "__auto",
           "refId": "A"
         }
@@ -371,7 +371,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\", source=\"cached\"}) / sum(technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum(max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\", source=\"cached\"})) / sum(max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "__auto",
           "refId": "A"
         }
@@ -432,7 +432,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\", source=\"blocked\"}) / sum(technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum(max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\", source=\"blocked\"})) / sum(max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "__auto",
           "refId": "A"
         }
@@ -501,7 +501,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\", result=\"server_failure\"}) / sum(technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum(max by (cluster, node, result, source) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\", result=\"server_failure\"})) / sum(max by (cluster, node, result, source) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "__auto",
           "refId": "A"
         }
@@ -595,7 +595,7 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "technitium_dns_stats_scrape_success{cluster=~\"$cluster\", node=~\"$node\"}",
+          "expr": "max by (cluster, node, result, source) (technitium_dns_stats_scrape_success{cluster=~\"$cluster\", node=~\"$node\"})",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
@@ -603,17 +603,90 @@
     },
     {
       "id": 10,
-      "type": "timeseries",
-      "title": "Time since last successful poll",
-      "description": "Seconds since each node's dashboard stats were last read successfully. Should stay near the operator's --technitium-stats-interval.",
+      "type": "bargauge",
+      "title": "Last poll age",
+      "description": "Seconds since each node's dashboard stats were last read successfully. Amber at 3m and red at 5m allow for the default 60s --technitium-stats-interval plus scrape lag; adjust the thresholds if you changed it.",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 4,
         "x": 12,
+        "y": 6
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "max": 300,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 180
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "namePlacement": "top",
+        "minVizHeight": 10,
+        "maxVizHeight": 24,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "time() - max by (cluster, node, result, source) (technitium_dns_stats_last_success_timestamp_seconds{cluster=~\"$cluster\", node=~\"$node\"})",
+          "legendFormat": "{{cluster}}/{{node}}",
+          "refId": "A",
+          "instant": true,
+          "range": false
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Worst poll age (5m)",
+      "description": "Longest time since a successful read of each node's dashboard stats within the trailing 5 minutes. Flat at about one polling interval when healthy; rises when polls fail or stall. Amber at 3m and red at 5m allow for the default 60s --technitium-stats-interval plus scrape lag; adjust the thresholds if you changed it.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
         "y": 6
       },
       "fieldConfig": {
@@ -628,24 +701,42 @@
             "stacking": {
               "mode": "none",
               "group": "A"
+            },
+            "axisSoftMax": 150,
+            "thresholdsStyle": {
+              "mode": "dashed"
             }
           },
           "color": {
             "mode": "palette-classic"
           },
-          "min": 0
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 180
+              },
+              {
+                "color": "red",
+                "value": 300
+              }
+            ]
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -658,14 +749,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "time() - technitium_dns_stats_last_success_timestamp_seconds{cluster=~\"$cluster\", node=~\"$node\"}",
+          "expr": "max_over_time((time() - max by (cluster, node, result, source) (technitium_dns_stats_last_success_timestamp_seconds{cluster=~\"$cluster\", node=~\"$node\"}))[5m:])",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "row",
       "title": "Queries (rolling last hour)",
       "collapsed": false,
@@ -678,7 +769,7 @@
       "panels": []
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "timeseries",
       "title": "Queries by response code",
       "description": "Last-hour queries by response code, summed over the selected nodes. Values are Technitium's rolling last-hour totals, so they are gauges: do not apply rate().",
@@ -714,13 +805,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -733,14 +821,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (result) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum by (result) (max by (cluster, node, result, source) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "{{result}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 13,
+      "id": 14,
       "type": "timeseries",
       "title": "Queries by source",
       "description": "Last-hour queries by how they were answered, summed over the selected nodes. Values are Technitium's rolling last-hour totals, so they are gauges: do not apply rate().",
@@ -776,13 +864,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -795,14 +880,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum by (source) (max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "{{source}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 14,
+      "id": 15,
       "type": "timeseries",
       "title": "Queries per node",
       "description": "Last-hour queries answered by each node. Values are Technitium's rolling last-hour totals, so they are gauges: do not apply rate().",
@@ -838,13 +923,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -857,14 +939,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (cluster, node) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "sum by (cluster, node) (max by (cluster, node, result, source) (technitium_dns_queries_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 15,
+      "id": 16,
       "type": "timeseries",
       "title": "Blocked share per node",
       "description": "Share of each node's last-hour queries that were blocked.",
@@ -901,13 +983,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -920,14 +999,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\", source=\"blocked\"} / ignoring(source) sum without (source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
+          "expr": "max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\", source=\"blocked\"}) / ignoring(source) sum without (source) (max by (cluster, node, result, source) (technitium_dns_queries_by_source_last_hour{cluster=~\"$cluster\", node=~\"$node\"}))",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 16,
+      "id": 17,
       "type": "timeseries",
       "title": "Clients per node",
       "description": "Distinct clients that queried each node over the last hour.",
@@ -963,13 +1042,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -982,14 +1058,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "technitium_dns_clients_last_hour{cluster=~\"$cluster\", node=~\"$node\"}",
+          "expr": "max by (cluster, node, result, source) (technitium_dns_clients_last_hour{cluster=~\"$cluster\", node=~\"$node\"})",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 17,
+      "id": 18,
       "type": "row",
       "title": "Server state",
       "collapsed": false,
@@ -1002,7 +1078,7 @@
       "panels": []
     },
     {
-      "id": 18,
+      "id": 19,
       "type": "timeseries",
       "title": "Cache entries",
       "description": "Entries currently in each node's DNS cache.",
@@ -1038,13 +1114,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -1057,14 +1130,14 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "technitium_dns_cache_entries{cluster=~\"$cluster\", node=~\"$node\"}",
+          "expr": "max by (cluster, node, result, source) (technitium_dns_cache_entries{cluster=~\"$cluster\", node=~\"$node\"})",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 19,
+      "id": 20,
       "type": "timeseries",
       "title": "Zones",
       "description": "Zones hosted by each node.",
@@ -1100,13 +1173,10 @@
       },
       "options": {
         "legend": {
-          "displayMode": "table",
+          "displayMode": "list",
           "placement": "bottom",
           "showLegend": true,
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "calcs": []
         },
         "tooltip": {
           "mode": "multi",
@@ -1119,61 +1189,59 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "technitium_dns_zones{cluster=~\"$cluster\", node=~\"$node\"}",
+          "expr": "max by (cluster, node, result, source) (technitium_dns_zones{cluster=~\"$cluster\", node=~\"$node\"})",
           "legendFormat": "{{cluster}}/{{node}}",
           "refId": "A"
         }
       ]
     },
     {
-      "id": 20,
-      "type": "timeseries",
-      "title": "Allow and block lists",
-      "description": "Domains in each cluster's allowed/blocked zones and loaded from allow/block lists (maximum over the selected nodes).",
+      "id": 21,
+      "type": "stat",
+      "title": "Block list domains",
+      "description": "Domains loaded from each cluster's block lists (maximum over the selected nodes).",
       "datasource": {
         "type": "prometheus",
         "uid": "${datasource}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 8,
+        "h": 4,
+        "w": 4,
         "x": 16,
         "y": 32
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 1,
-            "fillOpacity": 10,
-            "showPoints": "never",
-            "spanNulls": false,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            }
-          },
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
           }
         },
         "overrides": []
       },
       "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true,
+        "reduceOptions": {
           "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
       },
       "targets": [
         {
@@ -1181,41 +1249,194 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "max by (cluster) (technitium_dns_blocked_zones{cluster=~\"$cluster\", node=~\"$node\"})",
-          "legendFormat": "{{cluster}} blocked zones",
+          "expr": "max by (cluster) (max by (cluster, node, result, source) (technitium_dns_block_list_zones{cluster=~\"$cluster\", node=~\"$node\"}))",
+          "legendFormat": "{{cluster}}",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "max by (cluster) (technitium_dns_allowed_zones{cluster=~\"$cluster\", node=~\"$node\"})",
-          "legendFormat": "{{cluster}} allowed zones",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "max by (cluster) (technitium_dns_block_list_zones{cluster=~\"$cluster\", node=~\"$node\"})",
-          "legendFormat": "{{cluster}} block lists",
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${datasource}"
-          },
-          "expr": "max by (cluster) (technitium_dns_allow_list_zones{cluster=~\"$cluster\", node=~\"$node\"})",
-          "legendFormat": "{{cluster}} allow lists",
-          "refId": "D"
         }
       ]
     },
     {
-      "id": 25,
+      "id": 22,
+      "type": "stat",
+      "title": "Allow list domains",
+      "description": "Domains loaded from each cluster's allow lists (maximum over the selected nodes).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (cluster) (max by (cluster, node, result, source) (technitium_dns_allow_list_zones{cluster=~\"$cluster\", node=~\"$node\"}))",
+          "legendFormat": "{{cluster}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Blocked zone domains",
+      "description": "Domains in each cluster's blocked zones (maximum over the selected nodes).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (cluster) (max by (cluster, node, result, source) (technitium_dns_blocked_zones{cluster=~\"$cluster\", node=~\"$node\"}))",
+          "legendFormat": "{{cluster}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Allowed zone domains",
+      "description": "Domains in each cluster's allowed zones (maximum over the selected nodes).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 36
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "max by (cluster) (max by (cluster, node, result, source) (technitium_dns_allowed_zones{cluster=~\"$cluster\", node=~\"$node\"}))",
+          "legendFormat": "{{cluster}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 29,
       "type": "row",
       "title": "Operator",
       "collapsed": true,
@@ -1227,10 +1448,10 @@
       },
       "panels": [
         {
-          "id": 21,
+          "id": 25,
           "type": "timeseries",
           "title": "Reconciles by controller",
-          "description": "Reconciles per second by controller and result. Operator-wide: not filtered by the cluster/node variables.",
+          "description": "Reconciles per second by controller and result. Idle combinations are hidden. Operator-wide: not filtered by the cluster/node variables.",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -1257,19 +1478,17 @@
               },
               "color": {
                 "mode": "palette-classic"
-              }
+              },
+              "min": 0
             },
             "overrides": []
           },
           "options": {
             "legend": {
-              "displayMode": "table",
+              "displayMode": "list",
               "placement": "bottom",
               "showLegend": true,
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
+              "calcs": []
             },
             "tooltip": {
               "mode": "multi",
@@ -1282,17 +1501,18 @@
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "sum by (controller, result) (rate(controller_runtime_reconcile_total{controller=~\"$controller\"}[$__rate_interval]))",
+              "expr": "sum by (controller, result) (rate(controller_runtime_reconcile_total{controller=~\"$controller\"}[$__rate_interval])) > 0",
               "legendFormat": "{{controller}} {{result}}",
               "refId": "A"
             }
-          ]
+          ],
+          "interval": "5m"
         },
         {
-          "id": 22,
+          "id": 26,
           "type": "timeseries",
           "title": "Reconcile errors",
-          "description": "Reconcile errors per second by controller. Operator-wide: not filtered by the cluster/node variables.",
+          "description": "Reconcile errors per second by controller. Only controllers with errors are shown. Operator-wide: not filtered by the cluster/node variables.",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -1315,23 +1535,23 @@
                 "stacking": {
                   "mode": "none",
                   "group": "A"
-                }
+                },
+                "axisSoftMax": 0.01
               },
               "color": {
                 "mode": "palette-classic"
-              }
+              },
+              "min": 0,
+              "noValue": "No errors"
             },
             "overrides": []
           },
           "options": {
             "legend": {
-              "displayMode": "table",
+              "displayMode": "list",
               "placement": "bottom",
               "showLegend": true,
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
+              "calcs": []
             },
             "tooltip": {
               "mode": "multi",
@@ -1344,17 +1564,18 @@
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "sum by (controller) (rate(controller_runtime_reconcile_errors_total{controller=~\"$controller\"}[$__rate_interval]))",
+              "expr": "sum by (controller) (rate(controller_runtime_reconcile_errors_total{controller=~\"$controller\"}[$__rate_interval])) > 0",
               "legendFormat": "{{controller}}",
               "refId": "A"
             }
-          ]
+          ],
+          "interval": "5m"
         },
         {
-          "id": 23,
+          "id": 27,
           "type": "timeseries",
-          "title": "Reconcile duration p99",
-          "description": "99th percentile reconcile time by controller. Operator-wide: not filtered by the cluster/node variables.",
+          "title": "Average reconcile duration",
+          "description": "Mean time per reconcile by controller. Controllers that did not reconcile in the window are hidden. Operator-wide: not filtered by the cluster/node variables.",
           "datasource": {
             "type": "prometheus",
             "uid": "${datasource}"
@@ -1381,19 +1602,17 @@
               },
               "color": {
                 "mode": "palette-classic"
-              }
+              },
+              "min": 0
             },
             "overrides": []
           },
           "options": {
             "legend": {
-              "displayMode": "table",
+              "displayMode": "list",
               "placement": "bottom",
               "showLegend": true,
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
+              "calcs": []
             },
             "tooltip": {
               "mode": "multi",
@@ -1406,14 +1625,15 @@
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "histogram_quantile(0.99, sum by (controller, le) (rate(controller_runtime_reconcile_time_seconds_bucket{controller=~\"$controller\"}[$__rate_interval])))",
+              "expr": "sum by (controller) (rate(controller_runtime_reconcile_time_seconds_sum{controller=~\"$controller\"}[$__rate_interval])) / sum by (controller) (rate(controller_runtime_reconcile_time_seconds_count{controller=~\"$controller\"}[$__rate_interval])) > 0",
               "legendFormat": "{{controller}}",
               "refId": "A"
             }
-          ]
+          ],
+          "interval": "5m"
         },
         {
-          "id": 24,
+          "id": 28,
           "type": "timeseries",
           "title": "Workqueue depth",
           "description": "Items waiting in each controller's workqueue. Operator-wide: not filtered by the cluster/node variables.",
@@ -1439,23 +1659,22 @@
                 "stacking": {
                   "mode": "none",
                   "group": "A"
-                }
+                },
+                "axisSoftMax": 5
               },
               "color": {
                 "mode": "palette-classic"
-              }
+              },
+              "min": 0
             },
             "overrides": []
           },
           "options": {
             "legend": {
-              "displayMode": "table",
+              "displayMode": "list",
               "placement": "bottom",
               "showLegend": true,
-              "calcs": [
-                "lastNotNull",
-                "max"
-              ]
+              "calcs": []
             },
             "tooltip": {
               "mode": "multi",
