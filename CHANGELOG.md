@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.0](https://github.com/Charg/technitium-kube-operator/compare/v1.2.0...v1.3.0) (2026-10-15)
+
+
+### Features
+
+* **chart:** add optional RBAC for the ExternalDNS webhook sidecar ([#113](https://github.com/Charg/technitium-kube-operator/issues/113)) ([0ae2687](https://github.com/Charg/technitium-kube-operator/commit/0ae2687b3260b3ba2e1f87aed10a78c72e86ad0c))
+* **external-dns:** add webhook provider backed by Record CRs ([#114](https://github.com/Charg/technitium-kube-operator/issues/114)) ([0ffe2b1](https://github.com/Charg/technitium-kube-operator/commit/0ffe2b112eddd00a3aed69fdc585a40b2a732d8a))
+
 ## [1.2.0](https://github.com/Charg/technitium-kube-operator/compare/v1.1.0...v1.2.0) (2026-10-15)
 
 
