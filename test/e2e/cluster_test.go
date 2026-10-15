@@ -98,4 +98,33 @@ spec:
 	output, err = utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal("True"), "pod %s is not Ready under the health check probe", pod)
+
+	expectReportedVersion(name)
+}
+
+// expectReportedVersion asserts every node of the named TechnitiumCluster
+// reports the version of the deployed image tag, and that the cluster-wide
+// status.version summary (the Version print column) equals it. The nodes'
+// versions come from the live Technitium servers, so a match proves the
+// operator read them rather than echoing the spec.
+func expectReportedVersion(name string) {
+	wantVersion := strings.TrimPrefix(testimage.TechnitiumImage, "technitium/dns-server:")
+
+	Eventually(func(g Gomega) {
+		cmd := exec.Command("kubectl", "get", "technitiumcluster", name,
+			"-o", "jsonpath={.status.nodes[*].version}")
+		output, err := utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		versions := strings.Fields(output)
+		g.Expect(versions).NotTo(BeEmpty(), "no node reports a version yet")
+		for _, v := range versions {
+			g.Expect(v).To(Equal(wantVersion), "node version does not match the image tag")
+		}
+
+		cmd = exec.Command("kubectl", "get", "technitiumcluster", name,
+			"-o", "jsonpath={.status.version}")
+		output, err = utils.Run(cmd)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(output).To(Equal(wantVersion), "status.version does not equal the image tag")
+	}, 2*time.Minute, 5*time.Second).Should(Succeed())
 }

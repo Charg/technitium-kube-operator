@@ -63,6 +63,10 @@ spec:
 	output, err := utils.Run(cmd)
 	Expect(err).NotTo(HaveOccurred(), "admin Secret not found")
 	Expect(output).NotTo(BeEmpty(), "admin Secret carries no API token")
+
+	// A single replica never clusters, so its version comes from the node's
+	// own report rather than a clusterNodes entry.
+	expectReportedVersion(name)
 }
 
 // waitForWebhookEndpointReady blocks until the webhook Service has a ready

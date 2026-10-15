@@ -28,6 +28,9 @@ spec:
     - jsonPath: .status.readyReplicas
       name: Ready
       type: integer
+    - jsonPath: .status.version
+      name: Version
+      type: string
     - jsonPath: .status.members
       name: Members
       type: string
@@ -1713,6 +1716,13 @@ spec:
                         (for example Ready or NotReady) before the node has ever answered the
                         cluster state endpoint.
                       type: string
+                    version:
+                      description: |-
+                        version is the Technitium version this node is running, as reported by
+                        the cluster state endpoint. It is empty when the server does not report
+                        one (Technitium before 15.5 omits it for cluster members) or the node
+                        could not be read.
+                      type: string
                   required:
                   - name
                   type: object
@@ -1748,6 +1758,13 @@ spec:
                   ready.
                 format: int32
                 type: integer
+              version:
+                description: |-
+                  version summarizes the Technitium version across nodes: the version
+                  when every node that reports one agrees, "mixed" when they differ (for
+                  example during a rolling upgrade), and empty when no node reports one.
+                  Nodes with an unknown version are ignored.
+                type: string
             type: object
         required:
         - spec
