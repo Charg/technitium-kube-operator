@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/charg/technitium-operator/test/testimage"
 	"github.com/charg/technitium-operator/test/utils"
 )
 
@@ -452,6 +453,107 @@ var _ = Describe("Manager", Ordered, func() {
 			By("cleaning up")
 			cmd := exec.Command("kubectl", "delete", "technitiumcluster", name, "--wait=true", "--timeout=120s")
 			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			cmd = exec.Command("kubectl", "delete", "pvc", "-n", namespace,
+				"-l", "app.kubernetes.io/instance="+name, "--wait=true", "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("upgrades a 3-replica cluster one node at a time, Primary last, without disturbing Zones or Records", func() {
+			const replicas = 3
+			name := "e2e-upgrade"
+			zoneCR, recordCR := "e2e-upgrade-zone", "e2e-upgrade-record"
+
+			By("provisioning a 3-replica TechnitiumCluster on the older release")
+			deployClusteredTechnitiumClusterWithImage(name, replicas, testimage.PreviousTechnitiumImage)
+
+			By("creating a Zone and a Record on it")
+			applyZone(zoneCR, "upgrade.example.com", name)
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "zone", zoneCR,
+					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}, 2*time.Minute, 2*time.Second).Should(Succeed())
+			applyRecord(recordCR, namespace, "upgrade.example.com", "www.upgrade.example.com", name, "192.0.2.10")
+			verifyRecordReady(recordCR, namespace)
+
+			By("recording the pods' current revisions")
+			revision := func(ordinal int) (string, error) {
+				cmd := exec.Command("kubectl", "get", "pod", fmt.Sprintf("%s-%d", name, ordinal), "-n", namespace,
+					"-o", "jsonpath={.metadata.labels.controller-revision-hash}")
+				return utils.Run(cmd)
+			}
+			before := make([]string, replicas)
+			for i := range before {
+				var err error
+				before[i], err = revision(i)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(before[i]).NotTo(BeEmpty())
+			}
+
+			By("changing spec.image to the newer release")
+			cmd := exec.Command("kubectl", "patch", "technitiumcluster", name, "--type=merge",
+				"-p", fmt.Sprintf(`{"spec":{"image":%q}}`, testimage.TechnitiumImage))
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("watching the nodes restart and the rollout converge")
+			flippedAt := map[int]time.Time{}
+			wantStatus := strings.TrimPrefix(testimage.TechnitiumImage, "technitium/dns-server:") + "|False|UpToDate|Ready|3/3"
+			Eventually(func(g Gomega) {
+				for i := range replicas {
+					if _, seen := flippedAt[i]; seen {
+						continue
+					}
+					if rev, err := revision(i); err == nil && rev != "" && rev != before[i] {
+						flippedAt[i] = time.Now()
+					}
+				}
+				cmd := exec.Command("kubectl", "get", "technitiumcluster", name, "-o", "jsonpath="+
+					"{.status.version}|{.status.conditions[?(@.type=='Upgrading')].status}|"+
+					"{.status.conditions[?(@.type=='Upgrading')].reason}|{.status.phase}|{.status.members}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				_, _ = fmt.Fprintf(GinkgoWriter, "upgrade status: %s\n", output)
+				g.Expect(output).To(Equal(wantStatus))
+			}, 20*time.Minute, 2*time.Second).Should(Succeed())
+
+			By("checking the nodes restarted from the highest ordinal down, Primary last")
+			Expect(flippedAt).To(HaveLen(replicas))
+			Expect(flippedAt[2]).To(BeTemporally("<", flippedAt[1]))
+			Expect(flippedAt[1]).To(BeTemporally("<", flippedAt[0]))
+			created := make([]string, replicas)
+			for i := range created {
+				cmd := exec.Command("kubectl", "get", "pod", fmt.Sprintf("%s-%d", name, i), "-n", namespace,
+					"-o", "jsonpath={.metadata.creationTimestamp}")
+				output, err := utils.Run(cmd)
+				Expect(err).NotTo(HaveOccurred())
+				created[i] = output
+			}
+			Expect(created[2] < created[1]).To(BeTrue(), "pod 2 should have been recreated before pod 1: %v", created)
+			Expect(created[1] < created[0]).To(BeTrue(), "pod 1 should have been recreated before pod 0: %v", created)
+
+			By("verifying every node runs the new version and the Zone and Record are still Ready")
+			expectReportedVersionOf(name, testimage.TechnitiumImage)
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "zone", zoneCR,
+					"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("True"))
+			}, 2*time.Minute, 2*time.Second).Should(Succeed())
+			verifyRecordReady(recordCR, namespace)
+
+			By("cleaning up")
+			deleteRecordAndVerifyGone(recordCR, namespace)
+			cmd = exec.Command("kubectl", "delete", "zone", zoneCR, "--wait=true", "--timeout=90s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			cmd = exec.Command("kubectl", "delete", "technitiumcluster", name, "--wait=true", "--timeout=120s")
+			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			cmd = exec.Command("kubectl", "delete", "pvc", "-n", namespace,
 				"-l", "app.kubernetes.io/instance="+name, "--wait=true", "--timeout=60s")

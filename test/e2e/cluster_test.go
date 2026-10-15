@@ -41,6 +41,12 @@ const clusteredClusterName = "e2e-dns-cluster"
 // server domain once gave every node the same Technitium node name, so every
 // join after the first was refused.
 func deployClusteredTechnitiumCluster(name string, replicas int) {
+	deployClusteredTechnitiumClusterWithImage(name, replicas, testimage.TechnitiumImage)
+}
+
+// deployClusteredTechnitiumClusterWithImage is deployClusteredTechnitiumCluster
+// for a specific Technitium image, which upgrade specs start on an older one.
+func deployClusteredTechnitiumClusterWithImage(name string, replicas int, image string) {
 	manifest := fmt.Sprintf(`
 apiVersion: dns.packet.fail/v1alpha1
 kind: TechnitiumCluster
@@ -52,7 +58,7 @@ spec:
   dnsServerDomain: dns.e2e.test
   storage:
     size: 1Gi
-`, name, testimage.TechnitiumImage, replicas)
+`, name, image, replicas)
 	applyManifest("cluster-"+name, manifest)
 
 	// Clustering is the slowest step in the suite: it only starts once every
@@ -102,7 +108,7 @@ spec:
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal("True"), "pod %s is not Ready under the health check probe", pod)
 
-	expectReportedVersion(name)
+	expectReportedVersionOf(name, image)
 }
 
 // expectReportedVersion asserts every node of the named TechnitiumCluster
@@ -111,7 +117,12 @@ spec:
 // versions come from the live Technitium servers, so a match proves the
 // operator read them rather than echoing the spec.
 func expectReportedVersion(name string) {
-	wantVersion := strings.TrimPrefix(testimage.TechnitiumImage, "technitium/dns-server:")
+	expectReportedVersionOf(name, testimage.TechnitiumImage)
+}
+
+// expectReportedVersionOf is expectReportedVersion for a specific image.
+func expectReportedVersionOf(name, image string) {
+	wantVersion := strings.TrimPrefix(image, "technitium/dns-server:")
 
 	Eventually(func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "technitiumcluster", name,
