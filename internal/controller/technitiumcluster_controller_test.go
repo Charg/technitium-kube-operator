@@ -149,8 +149,19 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			// Readiness gates DNS traffic on the DNS listener; liveness
 			// watches the web API port.
 			Expect(container.ReadinessProbe).NotTo(BeNil())
-			Expect(container.ReadinessProbe.TCPSocket).NotTo(BeNil())
-			Expect(container.ReadinessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(53)))
+			Expect(container.ReadinessProbe.TCPSocket).To(BeNil())
+			Expect(container.ReadinessProbe.HTTPGet).To(BeNil())
+			Expect(container.ReadinessProbe.Exec).NotTo(BeNil())
+			Expect(container.ReadinessProbe.Exec.Command).To(HaveLen(3))
+			Expect(container.ReadinessProbe.Exec.Command[:2]).To(Equal([]string{"/bin/sh", "-c"}))
+			script := container.ReadinessProbe.Exec.Command[2]
+			Expect(script).To(ContainSubstring("curl -fsS"))
+			Expect(script).To(ContainSubstring("http://127.0.0.1:5380/api/dnsClient/healthCheck"))
+			Expect(script).To(ContainSubstring(`grep -q '"status":"ok"'`))
+			Expect(container.ReadinessProbe.InitialDelaySeconds).To(Equal(int32(5)))
+			Expect(container.ReadinessProbe.PeriodSeconds).To(Equal(int32(5)))
+			Expect(container.ReadinessProbe.TimeoutSeconds).To(Equal(int32(5)))
+			Expect(container.ReadinessProbe.FailureThreshold).To(Equal(int32(3)))
 			Expect(container.LivenessProbe).NotTo(BeNil())
 			Expect(container.LivenessProbe.TCPSocket).NotTo(BeNil())
 			Expect(container.LivenessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(5380)))

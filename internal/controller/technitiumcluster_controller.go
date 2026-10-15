@@ -1179,21 +1179,25 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string)
 		env = append(env, corev1.EnvVar{Name: "DNS_SERVER_DOMAIN", Value: tc.Spec.DNSServerDomain})
 	}
 
-	// Both probes are bare TCP checks: the image has no tooling such as dig
-	// to run an exec probe, and an HTTP path probe is unreliable because
-	// Technitium's root path redirects and kubelet does not follow redirects
-	// when scoring probe success.
+	// Readiness runs Technitium's own Health Check API, which confirms the
+	// server is up and can resolve names. Since Technitium 15.5 that call needs
+	// no token from loopback, but kubelet httpGet probes come from the node IP,
+	// so this is an exec probe running curl inside the container. The API
+	// answers 200 even when unhealthy ({"status":"error",...}), so curl -f is
+	// not enough on its own and the body is checked for "ok".
 	//
-	// Readiness targets the DNS port (Technitium serves DNS over TCP by
-	// default) so the client Service only sends DNS traffic to a pod that is
-	// actually listening on 53, which can lag the web listener. Liveness
-	// targets the web API port: it is a reliable proxy for "the server
-	// process is up", and a pod that is merely slow on DNS should be left out
-	// of the Service, not restarted.
+	// Liveness stays a cheap TCP check on the web API port: it only proves the
+	// process is up, so a pod that is unhealthy but alive is taken out of the
+	// Service rather than restarted in a loop.
 	readinessProbe := &corev1.Probe{
-		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(53)},
-		InitialDelaySeconds: 10,
-		PeriodSeconds:       10,
+		Exec: &corev1.ExecAction{Command: []string{
+			"/bin/sh", "-c",
+			`curl -fsS --max-time 4 http://127.0.0.1:5380/api/dnsClient/healthCheck | grep -q '"status":"ok"'`,
+		}},
+		InitialDelaySeconds: 5,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
 	}
 	livenessProbe := &corev1.Probe{
 		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(5380)},
