@@ -55,7 +55,8 @@ helm-verify:
     set -euo pipefail
     helm lint charts/technitium-operator
     helm lint charts/technitium-operator --set webhook.enabled=true,networkPolicy.enabled=true,metrics.serviceMonitor.enabled=true
-    helm template verify charts/technitium-operator --namespace verify --set webhook.enabled=true \
+    helm lint charts/technitium-operator --namespace verify --set externalDNS.rbac.create=true,externalDNS.rbac.serviceAccount.namespace=external-dns,externalDNS.rbac.recordNamespace=records
+    helm template verify charts/technitium-operator --namespace verify --set webhook.enabled=true,externalDNS.rbac.create=true \
         | go run ./hack/chartgen -check-rendered
 
 # Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations
