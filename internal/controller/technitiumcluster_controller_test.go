@@ -11,8 +11,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/charg/technitium-operator/test/testimage"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -28,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 var _ = Describe("TechnitiumCluster Controller", func() {

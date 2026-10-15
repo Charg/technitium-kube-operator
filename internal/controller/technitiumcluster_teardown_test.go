@@ -12,8 +12,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/charg/technitium-operator/test/testimage"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -24,6 +22,7 @@ import (
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 var _ = Describe("TechnitiumCluster Controller teardown", func() {

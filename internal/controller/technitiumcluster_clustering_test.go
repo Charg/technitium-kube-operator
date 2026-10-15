@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charg/technitium-operator/test/testimage"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -28,6 +26,7 @@ import (
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 // fakeClusterState is the shared server-side state a real 2-node Technitium
