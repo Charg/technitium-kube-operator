@@ -179,3 +179,21 @@ func (c *Client) InitJoinCluster(ctx context.Context, opts InitJoinOptions) (*Cl
 	}
 	return &state, nil
 }
+
+// UpdateNodeIPAddresses replaces the IP addresses the calling node is
+// recorded under in the cluster. It is the call that repairs a node whose
+// pod was rescheduled onto a new IP: it can be made against a Primary or a
+// Secondary, and the node propagates the new address to the rest of the
+// cluster itself (the Primary to every Secondary, a Secondary to the
+// Primary), so no per-peer follow-up is needed. Returns the node's cluster
+// state after the update.
+func (c *Client) UpdateNodeIPAddresses(ctx context.Context, ipAddresses []string) (*ClusterState, error) {
+	params := url.Values{}
+	params.Set("ipAddresses", strings.Join(ipAddresses, ","))
+
+	var state ClusterState
+	if err := c.do(ctx, "/api/admin/cluster/updateIpAddress", params, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
