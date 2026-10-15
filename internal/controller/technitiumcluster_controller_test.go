@@ -202,6 +202,24 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(podSpec.Volumes).To(ContainElement(HaveField("Name", "tmp")))
 		})
 
+		It("keeps the TCP 53 readiness probe for an image older than the health check", func() {
+			createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+				cr.Spec.Image = "technitium/dns-server:15.4.0"
+			})
+			_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			var sts appsv1.StatefulSet
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+			probe := sts.Spec.Template.Spec.Containers[0].ReadinessProbe
+			Expect(probe).NotTo(BeNil())
+			Expect(probe.Exec).To(BeNil())
+			Expect(probe.TCPSocket).NotTo(BeNil())
+			Expect(probe.TCPSocket.Port).To(Equal(intstr.FromInt32(53)))
+			Expect(probe.InitialDelaySeconds).To(Equal(int32(10)))
+			Expect(probe.PeriodSeconds).To(Equal(int32(10)))
+		})
+
 		It("corrects a hand-edited image and replica count back to spec", func() {
 			createClusterCR(nil)
 			r := newReconciler()
