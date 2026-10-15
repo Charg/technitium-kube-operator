@@ -487,6 +487,108 @@ var _ = Describe("Manager", Ordered, func() {
 				Expect(err).NotTo(HaveOccurred(), "Zone deletion did not complete")
 			})
 
+			AfterEach(func() {
+				if CurrentSpecReport().Failed() {
+					_, _ = fmt.Fprintf(GinkgoWriter, "ExternalDNS logs:\n%s\n", externalDNSLogs())
+					recs, _ := externalDNSRecords()
+					_, _ = fmt.Fprintf(GinkgoWriter, "Managed Records: %v\n", recs)
+				}
+			})
+
+			It("publishes a Service through ExternalDNS and the webhook sidecar, then removes it", func() {
+				const svcName = "e2e-edns-svc"
+				const host = "edns." + configZoneName
+
+				DeferCleanup(func() {
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "service", svcName, "-n", "default", "--ignore-not-found"))
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "pod", dnsClientPod, "-n", "default",
+						"--ignore-not-found", "--wait=false"))
+					removeExternalDNS()
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "records", "-n", namespace,
+						"-l", externalDNSLabelSelector, "--ignore-not-found", "--timeout=90s"))
+					_, _ = utils.Run(exec.Command("kubectl", "delete", "zone", configZone, "--ignore-not-found", "--timeout=90s"))
+				})
+				By("applying the Zone ExternalDNS publishes into")
+				applyZone(configZone, configZoneName, configCluster)
+				Eventually(func(g Gomega) {
+					cmd := exec.Command("kubectl", "get", "zone", configZone,
+						"-o", "jsonpath={.status.conditions[?(@.type=='Ready')].status}")
+					output, err := utils.Run(cmd)
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(output).To(Equal("True"), "Zone not Ready yet")
+				}, 2*time.Minute, 2*time.Second).Should(Succeed())
+
+				By("deploying ExternalDNS with the webhook sidecar")
+				deployExternalDNS(configCluster, configZoneName)
+				deployDNSClient()
+
+				By("annotating a Service so ExternalDNS publishes it")
+				applyExternalDNSService(svcName, host, "203.0.113.50")
+
+				By("waiting for the A and TXT registry Records to be created and Ready")
+				Eventually(func(g Gomega) {
+					recs, err := externalDNSRecords()
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(recs).To(ContainElement("A " + host + " True"))
+					var txt int
+					for _, r := range recs {
+						g.Expect(r).To(HaveSuffix(" True"), "Record not Ready: %s", r)
+						if strings.HasPrefix(r, "TXT ") {
+							txt++
+						}
+					}
+					g.Expect(txt).To(BeNumerically(">=", 1), "no TXT registry Record yet")
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+
+				By("resolving the A record against the Technitium server")
+				Eventually(func(g Gomega) {
+					out, err := dig(configCluster, host, "A")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(out).To(Equal("203.0.113.50"))
+				}, 2*time.Minute, 3*time.Second).Should(Succeed())
+
+				By("resolving every TXT registry record with its ownership data intact")
+				recs, err := externalDNSRecords()
+				Expect(err).NotTo(HaveOccurred())
+				for _, r := range recs {
+					f := strings.Fields(r)
+					if f[0] != "TXT" {
+						continue
+					}
+					Eventually(func(g Gomega) {
+						out, err := dig(configCluster, f[1], "TXT")
+						g.Expect(err).NotTo(HaveOccurred())
+						g.Expect(out).To(ContainSubstring("heritage=external-dns"))
+						g.Expect(out).To(ContainSubstring("external-dns/owner=e2e"))
+					}, 2*time.Minute, 3*time.Second).Should(Succeed(), "TXT %s", f[1])
+				}
+
+				By("checking the Records stay Ready and unchanged across several sync intervals")
+				before, err := externalDNSRecords()
+				Expect(err).NotTo(HaveOccurred())
+				Consistently(func(g Gomega) {
+					now, err := externalDNSRecords()
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(now).To(ConsistOf(before))
+				}, 30*time.Second, 5*time.Second).Should(Succeed())
+
+				By("deleting the Service and waiting for every managed Record to go")
+				_, err = utils.Run(exec.Command("kubectl", "delete", "service", svcName, "-n", "default"))
+				Expect(err).NotTo(HaveOccurred())
+				Eventually(func(g Gomega) {
+					recs, err := externalDNSRecords()
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(recs).To(BeEmpty())
+				}, 3*time.Minute, 3*time.Second).Should(Succeed())
+
+				By("verifying the name no longer resolves")
+				Eventually(func(g Gomega) {
+					out, err := dig(configCluster, host, "A")
+					g.Expect(err).NotTo(HaveOccurred())
+					g.Expect(out).To(BeEmpty())
+				}, 2*time.Minute, 3*time.Second).Should(Succeed())
+			})
+
 			It("reconciles a ServerSettings through to Ready and cleans it up on delete", func() {
 				By("applying a forwarder and waiting for Ready")
 				applyServerSettings("e2e-serversettings", namespace, configCluster, "1.1.1.1")
