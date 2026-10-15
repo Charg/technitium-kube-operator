@@ -139,6 +139,77 @@ example-com   example.com   Primary   True    12s
 
 More examples, including a `Forwarder` zone, are in `config/samples/dns_v1alpha1_zone.yaml`.
 
+## ExternalDNS webhook
+
+The operator image doubles as an [ExternalDNS webhook provider](https://kubernetes-sigs.github.io/external-dns/latest/docs/tutorials/webhook-provider/). Run it as a sidecar next to ExternalDNS with `manager external-dns-webhook`. It never calls Technitium itself: it turns ExternalDNS endpoints into `Record` resources and lets the `Record` controller do the server-side work. ExternalDNS records therefore get the same treatment as hand-written ones:
+
+- writes routed to the primary endpoint, with retries while it is down
+- drift correction, finalizer-guarded cleanup and `deletionPolicy`
+- visibility through `kubectl get records` and the Ready and Degraded conditions
+
+The zones you pass with `--zone` must already exist as `Zone` resources on the same `TechnitiumCluster`.
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--server-ref` | (required) | Name of the `TechnitiumCluster` Records are created for. |
+| `--zone` | (at least one) | Zone the webhook manages. Repeat for several zones; an endpoint goes to the longest matching zone suffix and is rejected when none match. |
+| `--namespace` | `POD_NAMESPACE`, then the ServiceAccount namespace | Namespace Records are created in. |
+| `--owner-id` | `default` | Identifier stamped on the Records this webhook owns. Use a distinct value per webhook instance sharing a namespace. |
+| `--listen` | `127.0.0.1:8888` | Address of the webhook API ExternalDNS calls. |
+| `--health-listen` | `:8080` | Address serving `GET /healthz`. |
+
+### RBAC
+
+ExternalDNS's ServiceAccount needs access to `Record` resources in the namespace the webhook writes to. The operator chart can create that Role and RoleBinding:
+
+```yaml
+# technitium-operator chart values
+externalDNS:
+  rbac:
+    create: true
+    serviceAccount:
+      name: external-dns        # the ServiceAccount ExternalDNS runs as
+      namespace: external-dns   # defaults to the release namespace
+    recordNamespace: dns        # where Records are written; defaults to the release namespace
+```
+
+Use the same namespace for `recordNamespace` and the webhook's `--namespace`.
+
+### ExternalDNS Helm values
+
+For the [kubernetes-sigs/external-dns chart](https://github.com/kubernetes-sigs/external-dns/tree/master/charts/external-dns). The chart appends `provider.webhook.args` to the image entrypoint (`/manager`), so the args start with the subcommand. Its default webhook probes hit `/healthz` on port 8080, which matches `--health-listen`.
+
+```yaml
+provider:
+  name: webhook
+  webhook:
+    image:
+      repository: ghcr.io/charg/technitium-kube-operator
+      tag: v1.3.0 # a release that includes the webhook (after v1.2.0)
+    args:
+      - external-dns-webhook
+      - --server-ref=dns
+      - --zone=home.example.com
+      - --namespace=dns
+sources:
+  - service
+  - ingress
+domainFilters:
+  - home.example.com
+policy: sync # upsert-only never deletes Records
+registry: txt
+txtOwnerId: my-cluster
+```
+
+### Notes
+
+- Supported record types are `A`, `AAAA`, `CNAME`, `TXT`, `NS`, `PTR` and `MX`. ExternalDNS only manages `A`, `AAAA` and `CNAME` by default, so add `managedRecordTypes: [A, AAAA, CNAME, MX, NS]` (the chart's `--managed-record-types`) when you need others.
+- With `registry: txt`, every ownership TXT record becomes a `Record` of its own, which roughly doubles the number of resources. When the operator is the only writer to the zone, `registry: noop` avoids that: the Records already carry the owner labels.
+- `policy: sync` deletes the `Record` when its source goes away, and the finalizer then removes it from the server (subject to `deletionPolicy`). `upsert-only` leaves it in place.
+- Each target becomes its own `Record`, named `edns-<hash>` and labelled `app.kubernetes.io/managed-by=external-dns` and `dns.packet.fail/external-dns-owner=<owner-id>`. List them with `kubectl get records -l app.kubernetes.io/managed-by=external-dns`.
+- Records have no owner references, because their sources live in other namespaces. They live as long as ExternalDNS keeps them.
+- Records match their server record on name, type and data. A hand-written `Record` with the same name, type and data as an ExternalDNS one shares the server record, so deleting either one removes it until the other's drift reconcile restores it.
+
 ## Metrics
 
 Technitium has no Prometheus endpoint of its own, so the operator polls each ready node's dashboard API (`/api/dashboard/stats/get`, last hour, that node only) in the background and republishes the values on its own metrics endpoint (`--metrics-bind-address`). Each node is read directly through its headless-Service address with the cluster's minted API token, so there is one series set per pod. Polling runs only on the elected leader.
