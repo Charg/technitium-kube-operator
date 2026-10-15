@@ -147,7 +147,7 @@ The operator image doubles as an [ExternalDNS webhook provider](https://kubernet
 - drift correction, finalizer-guarded cleanup and `deletionPolicy`
 - visibility through `kubectl get records` and the Ready and Degraded conditions
 
-The zones you pass with `--zone` must already exist as `Zone` resources on the same `TechnitiumCluster`.
+The zones you pass with `--zone` must already exist on that `TechnitiumCluster`, for example as `Zone` resources: like any `Record`, the webhook's Records do not create their zone.
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -185,7 +185,7 @@ provider:
   webhook:
     image:
       repository: ghcr.io/charg/technitium-kube-operator
-      tag: v1.3.0 # a release that includes the webhook (after v1.2.0)
+      tag: 1.3.0 # x-release-please-version
     args:
       - external-dns-webhook
       - --server-ref=dns

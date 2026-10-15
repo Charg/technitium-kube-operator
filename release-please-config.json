@@ -6,7 +6,8 @@
       "package-name": "technitium-operator",
       "include-component-in-tag": false,
       "extra-files": [
-        "charts/technitium-operator/Chart.yaml"
+        "charts/technitium-operator/Chart.yaml",
+        "README.md"
       ]
     }
   }
