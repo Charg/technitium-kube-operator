@@ -118,6 +118,21 @@ networkPolicy:
   # Restrict ingress to the /metrics endpoint to namespaces labeled `metrics: enabled`.
   enabled: false
 
+## @section ExternalDNS webhook
+
+externalDNS:
+  rbac:
+    # Grant ExternalDNS's ServiceAccount access to Record resources so the
+    # `manager external-dns-webhook` sidecar can manage them.
+    create: false
+    serviceAccount:
+      # Name of the ServiceAccount ExternalDNS runs as. Required when rbac.create is true.
+      name: external-dns
+      # Defaults to the release namespace when empty.
+      namespace: ""
+    # Namespace the webhook writes Record resources to. Defaults to the release namespace when empty.
+    recordNamespace: ""
+
 ## @section Extra customization
 
 extraArgs: []

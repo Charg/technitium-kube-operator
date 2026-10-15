@@ -1,0 +1,41 @@
+{{- if .Values.externalDNS.rbac.create }}
+{{- $sa := required "externalDNS.rbac.serviceAccount.name is required when externalDNS.rbac.create is true" .Values.externalDNS.rbac.serviceAccount.name }}
+{{- $saNamespace := default .Release.Namespace .Values.externalDNS.rbac.serviceAccount.namespace }}
+{{- $recordNamespace := default .Release.Namespace .Values.externalDNS.rbac.recordNamespace }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "technitium-operator.fullname" . }}-external-dns-webhook
+  namespace: {{ $recordNamespace }}
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - dns.packet.fail
+    resources:
+      - records
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "technitium-operator.fullname" . }}-external-dns-webhook
+  namespace: {{ $recordNamespace }}
+  labels:
+    {{- include "technitium-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "technitium-operator.fullname" . }}-external-dns-webhook
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ $saNamespace }}
+{{- end }}
