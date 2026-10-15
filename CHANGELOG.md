@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.2.0](https://github.com/Charg/technitium-kube-operator/compare/v1.1.0...v1.2.0) (2026-10-15)
+
+
+### Features
+
+* **metrics:** add a Grafana dashboard for the Technitium and operator metrics ([3ee2aee](https://github.com/Charg/technitium-kube-operator/commit/3ee2aee146e7775aa6ea28b21de41d1f28781040))
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#107](https://github.com/Charg/technitium-kube-operator/issues/107)) ([9b940cc](https://github.com/Charg/technitium-kube-operator/commit/9b940cc4afd519925d420c65bff67f7084906de6))
+* **deps:** update go dependencies (non-major) ([#106](https://github.com/Charg/technitium-kube-operator/issues/106)) ([01f45e6](https://github.com/Charg/technitium-kube-operator/commit/01f45e685d16c9509c8206d9069afd0e2f071084))
+* match records on name, type and data ([#112](https://github.com/Charg/technitium-kube-operator/issues/112)) ([3531eca](https://github.com/Charg/technitium-kube-operator/commit/3531eca8b27f7d8fbe2263146a3fc189cd7b4f03))
+* **metrics:** make the Grafana dashboard survive operator rollouts and read cleaner ([65ad9b6](https://github.com/Charg/technitium-kube-operator/commit/65ad9b6c3f5553addf48352e6566a904a8d0c424))
+
 ## [1.1.0](https://github.com/Charg/technitium-kube-operator/compare/v1.0.3...v1.1.0) (2026-10-14)
 
 
