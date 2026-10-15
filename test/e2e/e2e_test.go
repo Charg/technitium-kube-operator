@@ -437,6 +437,28 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("reconnects a clustered node after its pod is rescheduled with a new IP", func() {
+			const replicas = 3
+			name := "e2e-ip-refresh"
+			By("provisioning a 3-replica TechnitiumCluster and waiting for it to converge")
+			deployClusteredTechnitiumCluster(name, replicas)
+
+			By("deleting a Secondary pod")
+			restartPodAndAwaitReconnect(name, name+"-2", replicas)
+
+			By("deleting the Primary pod")
+			restartPodAndAwaitReconnect(name, name+"-0", replicas)
+
+			By("cleaning up")
+			cmd := exec.Command("kubectl", "delete", "technitiumcluster", name, "--wait=true", "--timeout=120s")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			cmd = exec.Command("kubectl", "delete", "pvc", "-n", namespace,
+				"-l", "app.kubernetes.io/instance="+name, "--wait=true", "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		// A single TechnitiumCluster backs all three config-CRD specs so the
 		// suite pays the image-pull and first-boot budget once rather than once
 		// per resource. ServerSettings and Blocklist both write through

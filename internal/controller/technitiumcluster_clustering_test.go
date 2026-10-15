@@ -128,6 +128,12 @@ func (f *fakeClusterNode) DeleteSecondary(ctx context.Context, secondaryNodeID i
 	return nil
 }
 
+// UpdateNodeIPAddresses is not exercised by these tests (IP refresh has its
+// own test file), but the type must satisfy nodeAPI to stand in for it.
+func (f *fakeClusterNode) UpdateNodeIPAddresses(ctx context.Context, ipAddresses []string) (*technitium.ClusterState, error) {
+	return nil, nil
+}
+
 func (f *fakeClusterNode) DeletePrimaryCluster(ctx context.Context, force bool) error {
 	return nil
 }

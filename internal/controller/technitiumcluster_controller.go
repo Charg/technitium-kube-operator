@@ -98,6 +98,7 @@ type nodeAPI interface {
 	RemoveSecondary(ctx context.Context, secondaryNodeID int) error
 	DeleteSecondary(ctx context.Context, secondaryNodeID int) error
 	DeletePrimaryCluster(ctx context.Context, force bool) error
+	UpdateNodeIPAddresses(ctx context.Context, ipAddresses []string) (*technitium.ClusterState, error)
 }
 
 // loginNodeClient wraps a *technitium.Client built with WithCredentials so
@@ -165,6 +166,16 @@ func (n *loginNodeClient) DeletePrimaryCluster(ctx context.Context, force bool) 
 		return err
 	}
 	return n.Client.DeletePrimaryCluster(ctx, force)
+}
+
+// UpdateNodeIPAddresses logs in on first use, then delegates. See
+// GetClusterState for why the login happens here rather than at
+// construction.
+func (n *loginNodeClient) UpdateNodeIPAddresses(ctx context.Context, ipAddresses []string) (*technitium.ClusterState, error) {
+	if err := n.ensureLoggedIn(ctx); err != nil {
+		return nil, err
+	}
+	return n.Client.UpdateNodeIPAddresses(ctx, ipAddresses)
 }
 
 // ensureLoggedIn mints a session token on first use of this wrapper. It is
@@ -791,6 +802,15 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 		}
 	}
 
+	// Init and initJoin pin a node's pod IP once. A pod that is later
+	// rescheduled comes back on a new IP while the cluster keeps the old one,
+	// and the node domain is deliberately unresolvable so nothing re-learns
+	// it. Correct the primary here, before the secondaries: the primary
+	// pushes its new address to every secondary itself.
+	if err := r.refreshNodeIP(ctx, tc, primaryOrdinal, primaryClient, primaryState, primaryPod.ip); err != nil {
+		return false, err
+	}
+
 	// primaryNodeUrl must be the primary's domain name, not an IP: Technitium
 	// stores it as the node's address in the cluster config. The actual join
 	// dial target is primaryNodeIpAddress below, which is why the domain
@@ -826,6 +846,9 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 			continue
 		}
 		if secondaryState.ClusterInitialized {
+			if err := r.refreshNodeIP(ctx, tc, i, secondaryClient, secondaryState, pod.ip); err != nil {
+				return false, err
+			}
 			continue
 		}
 
@@ -883,6 +906,36 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 	}
 
 	return true, nil
+}
+
+// refreshNodeIP repairs a clustered node whose pod was rescheduled onto a new
+// IP. state is that node's own cluster state: its Self entry holds the IP
+// addresses the cluster has recorded for it. When podIP is not among them,
+// the node is told its new address through updateIpAddress, which propagates
+// it to the rest of the cluster (a Secondary tells the Primary, the Primary
+// tells every Secondary), so no per-peer call is needed. A node that has not
+// joined a cluster, or whose state lists no Self entry yet, is left alone.
+func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, ordinal int32, node nodeAPI, state *technitium.ClusterState, podIP string) error {
+	if !state.ClusterInitialized {
+		return nil
+	}
+	var self *technitium.ClusterNode
+	for i := range state.Nodes {
+		if state.Nodes[i].State == nodeSelfState {
+			self = &state.Nodes[i]
+			break
+		}
+	}
+	if self == nil || slices.Contains(self.IPAddresses, podIP) {
+		return nil
+	}
+
+	if _, err := node.UpdateNodeIPAddresses(ctx, []string{podIP}); err != nil {
+		return fmt.Errorf("updating IP address of ordinal %d of %s to %s: %w", ordinal, tc.Name, podIP, err)
+	}
+	logf.FromContext(ctx).Info("Updated Technitium cluster node IP after pod IP changed",
+		"cluster", tc.Name, "ordinal", ordinal, "previous", self.IPAddresses, "current", podIP)
+	return nil
 }
 
 // reconcileWorkload brings the headless Service, client Service, admin
@@ -1432,6 +1485,8 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 const (
 	nodeReadyState    = "Ready"
 	nodeNotReadyState = "NotReady"
+	// nodeSelfState is the state a node reports for its own clusterNodes entry.
+	nodeSelfState = "Self"
 )
 
 // roleForOrdinal reports the role a StatefulSet ordinal is assumed to hold
@@ -1465,7 +1520,7 @@ func findClusterMember(nodes []technitium.ClusterNode, podName string) *techniti
 // Connected all mean the node is up and reachable.
 func nodeJoined(state string) bool {
 	switch state {
-	case nodeReadyState, "Self", "Connected":
+	case nodeReadyState, nodeSelfState, "Connected":
 		return true
 	default:
 		return false
@@ -1635,7 +1690,7 @@ func (r *TechnitiumClusterReconciler) buildNodeStatusesFromPrimary(ctx context.C
 			status.State = member.State
 			status.Message = ""
 			status.Version = member.Version
-			if status.Version == "" && member.State == "Self" {
+			if status.Version == "" && member.State == nodeSelfState {
 				// The Primary answered, so its own top-level version is this
 				// member's even when per-member versions are not reported.
 				status.Version = primaryState.Version
