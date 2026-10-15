@@ -262,7 +262,7 @@ type TechnitiumClusterReplicaServiceOverride struct {
 // TechnitiumClusterSpec defines the desired state of TechnitiumCluster.
 type TechnitiumClusterSpec struct {
 	// image is the container image for the Technitium DNS Server.
-	// +kubebuilder:default="technitium/dns-server:15.4.0"
+	// +kubebuilder:default="technitium/dns-server:15.6.1"
 	// +optional
 	Image string `json:"image,omitempty"`
 
