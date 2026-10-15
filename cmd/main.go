@@ -10,6 +10,7 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"os"
 	"time"
 
@@ -84,7 +85,8 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	if len(os.Args) > 1 && os.Args[1] == "external-dns-webhook" {
 		if err := externaldns.Run(ctrl.SetupSignalHandler(), os.Args[2:]); err != nil {
-			setupLog.Error(err, "External-dns webhook failed")
+			// The logger may not be set up yet (flag errors), so print directly.
+			fmt.Fprintf(os.Stderr, "external-dns-webhook: %v\n", err)
 			os.Exit(1)
 		}
 		return

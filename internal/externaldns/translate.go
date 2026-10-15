@@ -47,10 +47,11 @@ type Translator struct {
 }
 
 // RecordName returns the deterministic Record object name for one target of
-// an endpoint.
-func RecordName(dnsName, recordType, target, setIdentifier string) string {
+// an endpoint. The owner ID is part of the hash so two webhooks sharing a
+// namespace never contend for the same Record.
+func RecordName(ownerID, dnsName, recordType, target, setIdentifier string) string {
 	h := sha256.New()
-	for _, p := range []string{normalizeName(dnsName), strings.ToUpper(recordType), target, setIdentifier} {
+	for _, p := range []string{ownerID, normalizeName(dnsName), strings.ToUpper(recordType), target, setIdentifier} {
 		h.Write([]byte(p))
 		h.Write([]byte{0})
 	}
@@ -96,7 +97,7 @@ func (t *Translator) Desired(ep *Endpoint, target string) (*dnsv1alpha1.Record, 
 		return nil, fmt.Errorf("%s is not in any configured zone", ep.DNSName)
 	}
 	rec := &dnsv1alpha1.Record{
-		Name:      RecordName(ep.DNSName, ep.RecordType, target, ep.SetIdentifier),
+		Name:      RecordName(t.OwnerID, ep.DNSName, ep.RecordType, target, ep.SetIdentifier),
 		Namespace: t.Namespace,
 		Labels:    t.Selector(),
 		Spec: dnsv1alpha1.RecordSpec{
@@ -188,7 +189,7 @@ func (t *Translator) BuildPlan(c *Changes) (*Plan, error) {
 	p := &Plan{}
 	deleted := map[string]bool{}
 	del := func(ep *Endpoint, target string) {
-		n := RecordName(ep.DNSName, ep.RecordType, target, ep.SetIdentifier)
+		n := RecordName(t.OwnerID, ep.DNSName, ep.RecordType, target, ep.SetIdentifier)
 		if !deleted[n] {
 			deleted[n] = true
 			p.Delete = append(p.Delete, n)

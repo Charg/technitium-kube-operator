@@ -22,11 +22,12 @@ var _ = Describe("Translator", func() {
 
 	Describe("RecordName", func() {
 		It("is deterministic, DNS-1123 valid and short", func() {
-			a := RecordName("WWW.example.com.", "a", "1.2.3.4", "")
-			Expect(a).To(Equal(RecordName("www.example.com", "A", "1.2.3.4", "")))
+			a := RecordName("me", "WWW.example.com.", "a", "1.2.3.4", "")
+			Expect(a).To(Equal(RecordName("me", "www.example.com", "A", "1.2.3.4", "")))
 			Expect(a).To(MatchRegexp(`^edns-[0-9a-f]{32}$`))
-			Expect(RecordName("www.example.com", "A", "1.2.3.5", "")).NotTo(Equal(a))
-			Expect(RecordName("www.example.com", "A", "1.2.3.4", "set")).NotTo(Equal(a))
+			Expect(RecordName("me", "www.example.com", "A", "1.2.3.5", "")).NotTo(Equal(a))
+			Expect(RecordName("me", "www.example.com", "A", "1.2.3.4", "set")).NotTo(Equal(a))
+			Expect(RecordName("other", "www.example.com", "A", "1.2.3.4", "")).NotTo(Equal(a))
 		})
 	})
 
@@ -136,7 +137,7 @@ var _ = Describe("Translator", func() {
 		ep := func(ttl int64, targets ...string) *Endpoint {
 			return &Endpoint{DNSName: "www.example.com", RecordType: "A", RecordTTL: ttl, Targets: targets}
 		}
-		name := func(t string) string { return RecordName("www.example.com", "A", t, "") }
+		name := func(t string) string { return RecordName("me", "www.example.com", "A", t, "") }
 
 		It("creates one Record per target", func() {
 			p, err := tr.BuildPlan(&Changes{Create: []*Endpoint{ep(0, "1.1.1.1", "2.2.2.2")}})
