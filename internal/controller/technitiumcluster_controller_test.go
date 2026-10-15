@@ -149,8 +149,19 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			// Readiness gates DNS traffic on the DNS listener; liveness
 			// watches the web API port.
 			Expect(container.ReadinessProbe).NotTo(BeNil())
-			Expect(container.ReadinessProbe.TCPSocket).NotTo(BeNil())
-			Expect(container.ReadinessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(53)))
+			Expect(container.ReadinessProbe.TCPSocket).To(BeNil())
+			Expect(container.ReadinessProbe.HTTPGet).To(BeNil())
+			Expect(container.ReadinessProbe.Exec).NotTo(BeNil())
+			Expect(container.ReadinessProbe.Exec.Command).To(HaveLen(3))
+			Expect(container.ReadinessProbe.Exec.Command[:2]).To(Equal([]string{"/bin/sh", "-c"}))
+			script := container.ReadinessProbe.Exec.Command[2]
+			Expect(script).To(ContainSubstring("curl -fsS"))
+			Expect(script).To(ContainSubstring("http://127.0.0.1:5380/api/dnsClient/healthCheck"))
+			Expect(script).To(ContainSubstring(`grep -q '"status":"ok"'`))
+			Expect(container.ReadinessProbe.InitialDelaySeconds).To(Equal(int32(5)))
+			Expect(container.ReadinessProbe.PeriodSeconds).To(Equal(int32(5)))
+			Expect(container.ReadinessProbe.TimeoutSeconds).To(Equal(int32(5)))
+			Expect(container.ReadinessProbe.FailureThreshold).To(Equal(int32(3)))
 			Expect(container.LivenessProbe).NotTo(BeNil())
 			Expect(container.LivenessProbe.TCPSocket).NotTo(BeNil())
 			Expect(container.LivenessProbe.TCPSocket.Port).To(Equal(intstr.FromInt32(5380)))
@@ -189,6 +200,24 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(container.VolumeMounts).To(ContainElement(corev1.VolumeMount{Name: "tmp", MountPath: "/tmp"}))
 			Expect(podSpec.Volumes).To(ContainElement(HaveField("Name", "varlog")))
 			Expect(podSpec.Volumes).To(ContainElement(HaveField("Name", "tmp")))
+		})
+
+		It("keeps the TCP 53 readiness probe for an image older than the health check", func() {
+			createClusterCR(func(cr *dnsv1alpha1.TechnitiumCluster) {
+				cr.Spec.Image = "technitium/dns-server:15.4.0"
+			})
+			_, err := newReconciler().Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			var sts appsv1.StatefulSet
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: resourceName}, &sts)).To(Succeed())
+			probe := sts.Spec.Template.Spec.Containers[0].ReadinessProbe
+			Expect(probe).NotTo(BeNil())
+			Expect(probe.Exec).To(BeNil())
+			Expect(probe.TCPSocket).NotTo(BeNil())
+			Expect(probe.TCPSocket.Port).To(Equal(intstr.FromInt32(53)))
+			Expect(probe.InitialDelaySeconds).To(Equal(int32(10)))
+			Expect(probe.PeriodSeconds).To(Equal(int32(10)))
 		})
 
 		It("corrects a hand-edited image and replica count back to spec", func() {

@@ -88,6 +88,20 @@ spec:
 			"node state %q is not a joined cluster state", state)
 	}
 
+	// The pods gate readiness on Technitium's health check (an exec curl),
+	// not a bare TCP check, and a pod passing that probe reports Ready.
+	pod := name + "-0"
+	cmd = exec.Command("kubectl", "get", "pod", pod, "-n", namespace,
+		"-o", "jsonpath={.spec.containers[0].readinessProbe.exec.command[2]}")
+	output, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(ContainSubstring("/api/dnsClient/healthCheck"))
+	cmd = exec.Command("kubectl", "get", "pod", pod, "-n", namespace,
+		"-o", `jsonpath={.status.conditions[?(@.type=="Ready")].status}`)
+	output, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(output).To(Equal("True"), "pod %s is not Ready under the health check probe", pod)
+
 	expectReportedVersion(name)
 }
 

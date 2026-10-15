@@ -1232,22 +1232,7 @@ func podTemplateFor(tc *dnsv1alpha1.TechnitiumCluster, operatorNamespace string)
 		env = append(env, corev1.EnvVar{Name: "DNS_SERVER_DOMAIN", Value: tc.Spec.DNSServerDomain})
 	}
 
-	// Both probes are bare TCP checks: the image has no tooling such as dig
-	// to run an exec probe, and an HTTP path probe is unreliable because
-	// Technitium's root path redirects and kubelet does not follow redirects
-	// when scoring probe success.
-	//
-	// Readiness targets the DNS port (Technitium serves DNS over TCP by
-	// default) so the client Service only sends DNS traffic to a pod that is
-	// actually listening on 53, which can lag the web listener. Liveness
-	// targets the web API port: it is a reliable proxy for "the server
-	// process is up", and a pod that is merely slow on DNS should be left out
-	// of the Service, not restarted.
-	readinessProbe := &corev1.Probe{
-		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(53)},
-		InitialDelaySeconds: 10,
-		PeriodSeconds:       10,
-	}
+	readinessProbe := readinessProbeFor(tc.Spec.Image)
 	livenessProbe := &corev1.Probe{
 		TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(5380)},
 		InitialDelaySeconds: 10,
@@ -1787,4 +1772,42 @@ func (r *TechnitiumClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Named("technitiumcluster").
 		Complete(r)
+}
+
+// healthCheckMinVersion is the first Technitium release whose Health Check API
+// is callable without a token from loopback and whose image ships curl.
+var healthCheckMinVersion = technitium.Version{Major: 15, Minor: 5}
+
+// readinessProbeFor picks the readiness probe for an image. Technitium's own
+// Health Check API confirms the server is up and can resolve names. Since
+// 15.5 it needs no token from loopback, but kubelet httpGet probes come from
+// the node IP, so the probe is an exec running curl inside the container. The
+// API answers 200 even when unhealthy ({"status":"error",...}), so curl -f is
+// not enough on its own and the body is checked for "ok".
+//
+// Older images have no curl and require a token, so they keep a TCP check on
+// the DNS port. An image whose version cannot be determined (latest, a digest,
+// a custom tag) is assumed to be current.
+//
+// Liveness stays a cheap TCP check on the web API port: it only proves the
+// process is up, so a pod that is unhealthy but alive is taken out of the
+// Service rather than restarted in a loop.
+func readinessProbeFor(image string) *corev1.Probe {
+	if v, ok := technitium.ParseImageVersion(image); ok && v.Compare(healthCheckMinVersion) < 0 {
+		return &corev1.Probe{
+			TCPSocket:           &corev1.TCPSocketAction{Port: intstr.FromInt32(53)},
+			InitialDelaySeconds: 10,
+			PeriodSeconds:       10,
+		}
+	}
+	return &corev1.Probe{
+		Exec: &corev1.ExecAction{Command: []string{
+			"/bin/sh", "-c",
+			`curl -fsS --max-time 4 http://127.0.0.1:5380/api/dnsClient/healthCheck | grep -q '"status":"ok"'`,
+		}},
+		InitialDelaySeconds: 5,
+		PeriodSeconds:       5,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
+	}
 }
