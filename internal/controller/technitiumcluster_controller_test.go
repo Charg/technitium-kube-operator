@@ -11,6 +11,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/charg/technitium-operator/test/testimage"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -70,7 +72,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			cr := &dnsv1alpha1.TechnitiumCluster{
 				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
-					Image:   "technitium/dns-server:15.4.0",
+					Image:   testimage.TechnitiumImage,
 					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: storageSize},
 				},
 			}
@@ -133,7 +135,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
 			Expect(sts.Spec.Template.Spec.Containers).To(HaveLen(1))
 			container := sts.Spec.Template.Spec.Containers[0]
-			Expect(container.Image).To(Equal("technitium/dns-server:15.4.0"))
+			Expect(container.Image).To(Equal(testimage.TechnitiumImage))
 
 			envNames := make([]string, 0, len(container.Env))
 			for _, e := range container.Env {
@@ -209,7 +211,7 @@ var _ = Describe("TechnitiumCluster Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, stsKey, &sts)).To(Succeed())
-			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal("technitium/dns-server:15.4.0"))
+			Expect(sts.Spec.Template.Spec.Containers[0].Image).To(Equal(testimage.TechnitiumImage))
 			Expect(*sts.Spec.Replicas).To(Equal(int32(1)))
 		})
 

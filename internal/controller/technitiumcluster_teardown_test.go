@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/charg/technitium-operator/test/testimage"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -93,7 +95,7 @@ var _ = Describe("TechnitiumCluster Controller teardown", func() {
 			cr := &dnsv1alpha1.TechnitiumCluster{
 				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
-					Image:   "technitium/dns-server:15.4.0",
+					Image:   testimage.TechnitiumImage,
 					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: storageSize},
 				},
 			}

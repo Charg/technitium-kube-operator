@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/charg/technitium-operator/test/testimage"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
@@ -88,7 +90,7 @@ var _ = Describe("TechnitiumCluster Controller bootstrap", func() {
 			cr := &dnsv1alpha1.TechnitiumCluster{
 				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
-					Image:   "technitium/dns-server:15.4.0",
+					Image:   testimage.TechnitiumImage,
 					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: storageSize},
 				},
 			}
