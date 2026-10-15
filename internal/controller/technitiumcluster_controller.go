@@ -1370,6 +1370,10 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 			tc.Status.Nodes = nodes
 			changed = true
 		}
+		if version := summarizeVersions(nodes); tc.Status.Version != version {
+			tc.Status.Version = version
+			changed = true
+		}
 		if tc.Status.Members != members {
 			tc.Status.Members = members
 			changed = true
@@ -1556,6 +1560,11 @@ func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc 
 			continue
 		}
 
+		// The node's own top-level version is the fallback: it is exactly
+		// this node's version, and covers an uninitialized node and servers
+		// too old to report a per-member version.
+		status.Version = state.Version
+
 		if state.ClusterInitialized {
 			if member := findClusterMember(state.Nodes, podName); member != nil {
 				status.Role = member.Type
@@ -1576,6 +1585,30 @@ func (r *TechnitiumClusterReconciler) buildNodeStatuses(ctx context.Context, tc 
 	}
 
 	return nodes, fmt.Sprintf("%d/%d", joined, desiredReplicas)
+}
+
+// mixedVersion is the status.version value when nodes report different
+// Technitium versions.
+const mixedVersion = "mixed"
+
+// summarizeVersions reduces the per-node versions to the single value shown
+// in the Version print column: the shared version when every node that
+// reports one agrees, mixedVersion when they differ, and empty when none
+// reports one. A node with an empty version (older Technitium, or unreadable)
+// is ignored rather than counted as a disagreement, so a node that is merely
+// unreachable does not turn a uniform cluster into "mixed".
+func summarizeVersions(nodes []dnsv1alpha1.TechnitiumClusterNodeStatus) string {
+	summary := ""
+	for _, n := range nodes {
+		switch {
+		case n.Version == "":
+		case summary == "":
+			summary = n.Version
+		case summary != n.Version:
+			return mixedVersion
+		}
+	}
+	return summary
 }
 
 // buildNodeStatusesFromPrimary reads the primary's own /state and, once it
@@ -1616,6 +1649,12 @@ func (r *TechnitiumClusterReconciler) buildNodeStatusesFromPrimary(ctx context.C
 			status.Role = member.Type
 			status.State = member.State
 			status.Message = ""
+			status.Version = member.Version
+			if status.Version == "" && member.State == "Self" {
+				// The Primary answered, so its own top-level version is this
+				// member's even when per-member versions are not reported.
+				status.Version = primaryState.Version
+			}
 			if member.ConfigLastSynced != nil {
 				status.LastSynced = &metav1.Time{Time: *member.ConfigLastSynced}
 			}
