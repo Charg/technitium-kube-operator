@@ -209,15 +209,7 @@ func (r *RecordReconciler) reconcileRecord(ctx context.Context, record *dnsv1alp
 			}
 		}
 		log.Info("Created Record", "name", spec.Name, "type", spec.Type)
-
-		if stale := findRecord(records, appliedSpec(record)); stale != nil {
-			if err := api.DeleteRecord(ctx, deleteOptionsFromCurrent(spec, stale)); err != nil && !errors.Is(err, technitium.ErrRecordNotFound) {
-				return err
-			}
-			log.Info("Deleted stale Record data after a spec change", "name", spec.Name, "type", spec.Type,
-				"data", record.Status.AppliedData)
-		}
-		return nil
+		return deleteStaleRecord(ctx, api, record, records, nil)
 	}
 
 	if !recordDataMatches(spec, current) {
@@ -242,6 +234,37 @@ func (r *RecordReconciler) reconcileRecord(ctx context.Context, record *dnsv1alp
 		log.Info("Corrected Record TTL drift", "name", spec.Name, "type", spec.Type, "ttl", desiredTTL)
 	}
 
+	return deleteStaleRecord(ctx, api, record, records, current)
+}
+
+// deleteStaleRecord removes the record still carrying status.appliedData after
+// a spec.data (or MX priority) change, once the desired record is in place.
+// It runs on every reconcile rather than only when the desired record was just
+// added: if a previous reconcile added the new value but failed or crashed
+// before deleting the old one, the next reconcile finds the new value present
+// and must still clean up, or markReady would overwrite appliedData and orphan
+// the old value. CNAME is skipped, since findRecord matches it on type alone
+// and its rdata drift is corrected by recreating it. current, the record
+// matching the spec (nil if it was just added), is never treated as stale.
+func deleteStaleRecord(ctx context.Context, api RecordAPI, record *dnsv1alpha1.Record,
+	records []technitium.Record, current *technitium.Record) error {
+	spec := record.Spec
+	if spec.Type == dnsv1alpha1.RecordTypeCNAME || record.Status.AppliedData == "" {
+		return nil
+	}
+	if record.Status.AppliedData == spec.Data && ptr.Equal(record.Status.AppliedPriority, spec.Priority) {
+		return nil
+	}
+
+	stale := findRecord(records, appliedSpec(record))
+	if stale == nil || stale == current {
+		return nil
+	}
+	if err := api.DeleteRecord(ctx, deleteOptionsFromCurrent(spec, stale)); err != nil && !errors.Is(err, technitium.ErrRecordNotFound) {
+		return err
+	}
+	logf.FromContext(ctx).Info("Deleted stale Record data after a spec change", "name", spec.Name, "type", spec.Type,
+		"data", record.Status.AppliedData)
 	return nil
 }
 
