@@ -30,6 +30,7 @@ import (
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/controller"
+	"github.com/charg/technitium-operator/internal/externaldns"
 	webhookv1alpha1 "github.com/charg/technitium-operator/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
@@ -81,6 +82,13 @@ func main() {
 		Development: true,
 	}
 	opts.BindFlags(flag.CommandLine)
+	if len(os.Args) > 1 && os.Args[1] == "external-dns-webhook" {
+		if err := externaldns.Run(ctrl.SetupSignalHandler(), os.Args[2:]); err != nil {
+			setupLog.Error(err, "External-dns webhook failed")
+			os.Exit(1)
+		}
+		return
+	}
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
