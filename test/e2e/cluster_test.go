@@ -18,6 +18,7 @@ import (
 
 	. "github.com/onsi/gomega"
 
+	"github.com/charg/technitium-operator/test/testimage"
 	"github.com/charg/technitium-operator/test/utils"
 )
 
@@ -43,12 +44,12 @@ kind: TechnitiumCluster
 metadata:
   name: %s
 spec:
-  image: technitium/dns-server:15.4.0
+  image: %s
   replicas: %d
   dnsServerDomain: dns.e2e.test
   storage:
     size: 1Gi
-`, name, replicas)
+`, name, testimage.TechnitiumImage, replicas)
 	applyManifest("cluster-"+name, manifest)
 
 	// Clustering is the slowest step in the suite: it only starts once every

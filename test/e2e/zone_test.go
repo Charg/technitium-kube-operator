@@ -19,6 +19,7 @@ import (
 
 	. "github.com/onsi/gomega"
 
+	"github.com/charg/technitium-operator/test/testimage"
 	"github.com/charg/technitium-operator/test/utils"
 )
 
@@ -39,10 +40,10 @@ kind: TechnitiumCluster
 metadata:
   name: %s
 spec:
-  image: technitium/dns-server:15.4.0
+  image: %s
   storage:
     size: 1Gi
-`, name)
+`, name, testimage.TechnitiumImage)
 	applyManifest("cluster-"+name, manifest)
 
 	// Ready gates on image pull, first boot, and token creation, so it is the

@@ -26,6 +26,7 @@ import (
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 // fakeClusterState is the shared server-side state a real 2-node Technitium
@@ -186,7 +187,7 @@ var _ = Describe("TechnitiumCluster Controller clustering", func() {
 			cr := &dnsv1alpha1.TechnitiumCluster{
 				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
-					Image:    "technitium/dns-server:15.4.0",
+					Image:    testimage.TechnitiumImage,
 					Storage:  dnsv1alpha1.TechnitiumClusterStorageSpec{Size: storageSize},
 					Replicas: ptr.To(int32(2)),
 				},
@@ -222,7 +223,7 @@ var _ = Describe("TechnitiumCluster Controller clustering", func() {
 				Labels:    instanceLabels(resourceName),
 				Spec: corev1.PodSpec{
 					Containers: []corev1.Container{
-						{Name: "dns-server", Image: "technitium/dns-server:15.4.0"},
+						{Name: "dns-server", Image: testimage.TechnitiumImage},
 					},
 				},
 			}

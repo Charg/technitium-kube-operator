@@ -23,6 +23,7 @@ import (
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 // fakeZoneAPI records the calls the reconciler makes and returns programmed
@@ -452,7 +453,7 @@ var _ = Describe("Zone cluster catalog", func() {
 		Expect(k8sClient.Create(ctx, &dnsv1alpha1.TechnitiumCluster{
 			Name: clusterName,
 			Spec: dnsv1alpha1.TechnitiumClusterSpec{
-				Image:         "technitium/dns-server:15.4.0",
+				Image:         testimage.TechnitiumImage,
 				Replicas:      ptr.To(replicas),
 				ClusterDomain: domain,
 				Storage:       dnsv1alpha1.TechnitiumClusterStorageSpec{Size: resource.MustParse("1Gi")},

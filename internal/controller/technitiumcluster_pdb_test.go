@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 // Reconcile never sees the StatefulSet become ready under envtest, so none of
@@ -61,7 +62,7 @@ var _ = Describe("TechnitiumCluster Controller PodDisruptionBudget", func() {
 			cr := &dnsv1alpha1.TechnitiumCluster{
 				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
-					Image:   "technitium/dns-server:15.4.0",
+					Image:   testimage.TechnitiumImage,
 					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: resource.MustParse("1Gi")},
 				},
 			}
