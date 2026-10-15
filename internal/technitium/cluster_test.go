@@ -294,3 +294,27 @@ func TestLeaveCluster(t *testing.T) {
 		t.Errorf("forceLeave param = %q, want true", got)
 	}
 }
+
+func TestGetClusterStateDecodesMemberVersion(t *testing.T) {
+	body := `{"response":{"version":"15.6.1","clusterInitialized":true,"clusterNodes":[` +
+		`{"id":1,"name":"dns-0.c","type":"Primary","state":"Self","version":"15.6.1"},` +
+		`{"id":2,"name":"dns-1.c","type":"Secondary","state":"Connected"}` +
+		`]},"status":"ok"}`
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	})
+
+	state, err := c.GetClusterState(context.Background())
+	if err != nil {
+		t.Fatalf("GetClusterState: %v", err)
+	}
+	if state.Version != "15.6.1" {
+		t.Errorf("Version = %q, want 15.6.1", state.Version)
+	}
+	if state.Nodes[0].Version != "15.6.1" {
+		t.Errorf("Nodes[0].Version = %q, want 15.6.1", state.Nodes[0].Version)
+	}
+	if state.Nodes[1].Version != "" {
+		t.Errorf("Nodes[1].Version = %q, want empty when omitted", state.Nodes[1].Version)
+	}
+}
