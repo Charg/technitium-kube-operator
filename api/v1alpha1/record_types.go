@@ -138,8 +138,10 @@ type RecordStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Domain",type=string,JSONPath=`.spec.name`
 // +kubebuilder:printcolumn:name="Zone",type=string,JSONPath=`.spec.zone`
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Data",type=string,JSONPath=`.spec.data`,priority=1
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=='Ready')].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

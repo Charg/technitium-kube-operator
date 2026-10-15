@@ -15,11 +15,18 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
+    - jsonPath: .spec.name
+      name: Domain
+      type: string
     - jsonPath: .spec.zone
       name: Zone
       type: string
     - jsonPath: .spec.type
       name: Type
+      type: string
+    - jsonPath: .spec.data
+      name: Data
+      priority: 1
       type: string
     - jsonPath: .status.conditions[?(@.type=='Ready')].status
       name: Ready
