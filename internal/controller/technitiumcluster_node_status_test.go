@@ -21,6 +21,7 @@ import (
 
 	dnsv1alpha1 "github.com/charg/technitium-operator/api/v1alpha1"
 	"github.com/charg/technitium-operator/internal/technitium"
+	"github.com/charg/technitium-operator/test/testimage"
 )
 
 // fakeNodeClient is a nodeAPI stand-in that reports a canned cluster state
@@ -164,7 +165,7 @@ var _ = Describe("TechnitiumCluster Controller node status", func() {
 			cr := &dnsv1alpha1.TechnitiumCluster{
 				Name: resourceName,
 				Spec: dnsv1alpha1.TechnitiumClusterSpec{
-					Image:   "technitium/dns-server:15.4.0",
+					Image:   testimage.TechnitiumImage,
 					Storage: dnsv1alpha1.TechnitiumClusterStorageSpec{Size: storageSize},
 				},
 			}
@@ -238,6 +239,99 @@ var _ = Describe("TechnitiumCluster Controller node status", func() {
 			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
 			Expect(cr.Status.Nodes).To(BeEmpty())
 			Expect(gotEndpoints).To(BeEmpty())
+		})
+
+		It("reports the node's own version for a single replica, with status.version equal to it", func() {
+			createClusterCR()
+			r := newReconciler()
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			markStatefulSetReady(1)
+			_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			var cr dnsv1alpha1.TechnitiumCluster
+			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
+			Expect(cr.Status.Nodes).To(HaveLen(1))
+			Expect(cr.Status.Nodes[0].Version).To(Equal("13.4.0"))
+			Expect(cr.Status.Version).To(Equal("13.4.0"))
+		})
+	})
+
+	Context("Reading per-node versions from the Primary's cluster state", func() {
+		ctx := context.Background()
+
+		buildFor := func(replicas int32, state *technitium.ClusterState) ([]dnsv1alpha1.TechnitiumClusterNodeStatus, string) {
+			r := &TechnitiumClusterReconciler{
+				Client:            k8sClient,
+				Scheme:            k8sClient.Scheme(),
+				OperatorNamespace: "default",
+				NewNodeClient: func(endpoint, username, password string) (nodeAPI, error) {
+					return &fakeNodeClient{state: state}, nil
+				},
+			}
+			tc := &dnsv1alpha1.TechnitiumCluster{Name: "vc"}
+			nodes, _, ok := r.buildNodeStatusesFromPrimary(ctx, tc, "admin", "pw", replicas)
+			Expect(ok).To(BeTrue())
+			return nodes, summarizeVersions(nodes)
+		}
+
+		member := func(name, typ, state, version string) technitium.ClusterNode {
+			return technitium.ClusterNode{Name: name + ".example.com", Type: typ, State: state, Version: version}
+		}
+
+		It("copies each member's version and summarizes it when every node agrees", func() {
+			nodes, summary := buildFor(2, &technitium.ClusterState{
+				Version:            "15.6.1",
+				ClusterInitialized: true,
+				Nodes: []technitium.ClusterNode{
+					member("vc-0", "Primary", "Self", "15.6.1"),
+					member("vc-1", "Secondary", "Connected", "15.6.1"),
+				},
+			})
+			Expect(nodes[0].Version).To(Equal("15.6.1"))
+			Expect(nodes[1].Version).To(Equal("15.6.1"))
+			Expect(summary).To(Equal("15.6.1"))
+		})
+
+		It("summarizes mixed when the nodes disagree", func() {
+			nodes, summary := buildFor(2, &technitium.ClusterState{
+				Version:            "15.6.1",
+				ClusterInitialized: true,
+				Nodes: []technitium.ClusterNode{
+					member("vc-0", "Primary", "Self", "15.6.1"),
+					member("vc-1", "Secondary", "Connected", "15.5"),
+				},
+			})
+			Expect(nodes[1].Version).To(Equal("15.5"))
+			Expect(summary).To(Equal("mixed"))
+		})
+
+		It("leaves a member's version empty when Technitium omits it, without erroring", func() {
+			nodes, summary := buildFor(2, &technitium.ClusterState{
+				Version:            "15.4",
+				ClusterInitialized: true,
+				Nodes: []technitium.ClusterNode{
+					member("vc-0", "Primary", "Self", ""),
+					member("vc-1", "Secondary", "Connected", ""),
+				},
+			})
+			// Only the responding Primary has a top-level version, so only
+			// that node can be filled in.
+			Expect(nodes[0].Version).To(Equal("15.4"))
+			Expect(nodes[1].Version).To(BeEmpty())
+			Expect(summary).To(Equal("15.4"))
+		})
+
+		It("summarizes empty when no node reports a version", func() {
+			Expect(summarizeVersions([]dnsv1alpha1.TechnitiumClusterNodeStatus{{Name: "a"}, {Name: "b"}})).To(BeEmpty())
+		})
+
+		It("ignores nodes with an unknown version when the known ones agree", func() {
+			Expect(summarizeVersions([]dnsv1alpha1.TechnitiumClusterNodeStatus{
+				{Name: "a", Version: "15.6.1"}, {Name: "b"},
+			})).To(Equal("15.6.1"))
 		})
 	})
 })

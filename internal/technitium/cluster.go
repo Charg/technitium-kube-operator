@@ -67,6 +67,9 @@ type ClusterNode struct {
 	IPAddresses []string `json:"ipAddresses"`
 	Type        string   `json:"type"`
 	State       string   `json:"state"`
+	// Version is the Technitium version the member runs. Technitium reports it
+	// from 15.5 on; older servers omit it, which leaves this empty.
+	Version string `json:"version,omitempty"`
 	// UpSince, LastSeen, and ConfigLastSynced are pointers because Technitium
 	// omits them entirely for a node that has never come up (a Secondary that
 	// initJoin'd but has not yet synced), rather than sending a zero time.

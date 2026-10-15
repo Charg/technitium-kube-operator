@@ -262,7 +262,7 @@ type TechnitiumClusterReplicaServiceOverride struct {
 // TechnitiumClusterSpec defines the desired state of TechnitiumCluster.
 type TechnitiumClusterSpec struct {
 	// image is the container image for the Technitium DNS Server.
-	// +kubebuilder:default="technitium/dns-server:15.4.0"
+	// +kubebuilder:default="technitium/dns-server:15.6.1"
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -400,6 +400,13 @@ type TechnitiumClusterNodeStatus struct {
 	// +optional
 	State string `json:"state,omitempty"`
 
+	// version is the Technitium version this node is running, as reported by
+	// the cluster state endpoint. It is empty when the server does not report
+	// one (Technitium before 15.5 omits it for cluster members) or the node
+	// could not be read.
+	// +optional
+	Version string `json:"version,omitempty"`
+
 	// lastSynced is when this node last reported its configuration in sync
 	// with the cluster, taken from the node's own configLastSynced. Nil until
 	// the node has been queried successfully at least once.
@@ -473,6 +480,13 @@ type TechnitiumClusterStatus struct {
 	// +optional
 	Nodes []TechnitiumClusterNodeStatus `json:"nodes,omitempty"`
 
+	// version summarizes the Technitium version across nodes: the version
+	// when every node that reports one agrees, "mixed" when they differ (for
+	// example during a rolling upgrade), and empty when no node reports one.
+	// Nodes with an unknown version are ignored.
+	// +optional
+	Version string `json:"version,omitempty"`
+
 	// members renders joined/total node counts, for example "1/1". It is a
 	// string rather than two integer fields because a printer column can only
 	// JSONPath into a stored value, not compute one from Nodes.
@@ -485,6 +499,7 @@ type TechnitiumClusterStatus struct {
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.version`
 // +kubebuilder:printcolumn:name="Members",type=string,JSONPath=`.status.members`
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=`.status.endpoint`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
