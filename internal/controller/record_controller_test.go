@@ -316,24 +316,202 @@ var _ = Describe("Record Controller", func() {
 			Expect(api.updateCalls[0].IPAddress).To(Equal("1.1.1.1"))
 		})
 
-		It("corrects rdata drift by deleting and recreating the record", func() {
+		// serverHas returns a GetRecords stub serving recordType records, each
+		// with the CR's default TTL so only the rdata differs between them.
+		serverHas := func(recordType string, data ...technitium.RecordData) func(string) ([]technitium.Record, error) {
+			return func(domain string) ([]technitium.Record, error) {
+				records := make([]technitium.Record, 0, len(data))
+				for _, d := range data {
+					records = append(records, technitium.Record{Name: domain, Type: recordType, TTL: 3600, RData: d})
+				}
+				return records, nil
+			}
+		}
+
+		// setApplied records data (and priority) as already written to the
+		// server, as a previous successful reconcile would have.
+		setApplied := func(data string, priority *int32) {
+			record := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, record)).To(Succeed())
+			record.Status.AppliedData = data
+			record.Status.AppliedPriority = priority
+			Expect(k8sClient.Status().Update(ctx, record)).To(Succeed())
+		}
+
+		It("adds its record alongside another record of the same name and type", func() {
+			createRecordCR(nil)
+			api := &fakeRecordAPI{getRecords: serverHas("A", technitium.RecordData{IPAddress: "2.2.2.2"})}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.addCalls).To(HaveLen(1))
+			Expect(api.addCalls[0].IPAddress).To(Equal("1.1.1.1"))
+			Expect(api.deleteCalls).To(BeEmpty())
+			Expect(api.updateCalls).To(BeEmpty())
+		})
+
+		It("finds its own record among several of the same name and type", func() {
+			createRecordCR(nil)
+			api := &fakeRecordAPI{getRecords: serverHas("A",
+				technitium.RecordData{IPAddress: "2.2.2.2"},
+				technitium.RecordData{IPAddress: "1.1.1.1"},
+			)}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.addCalls).To(BeEmpty())
+			Expect(api.deleteCalls).To(BeEmpty())
+			Expect(api.updateCalls).To(BeEmpty())
+		})
+
+		It("corrects TTL drift on its own record, not the first of the type", func() {
 			createRecordCR(nil)
 			api := &fakeRecordAPI{
 				getRecords: func(domain string) ([]technitium.Record, error) {
-					return []technitium.Record{{
-						Name: domain, Type: "A", TTL: 3600,
-						RData: technitium.RecordData{IPAddress: "9.9.9.9"},
-					}}, nil
+					return []technitium.Record{
+						{Name: domain, Type: "A", TTL: 3600, RData: technitium.RecordData{IPAddress: "2.2.2.2"}},
+						{Name: domain, Type: "A", TTL: 60, RData: technitium.RecordData{IPAddress: "1.1.1.1"}},
+					}, nil
 				},
 			}
 
 			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(api.deleteCalls).To(HaveLen(1))
-			Expect(api.deleteCalls[0].IPAddress).To(Equal("9.9.9.9"))
+			Expect(api.updateCalls).To(HaveLen(1))
+			Expect(api.updateCalls[0].IPAddress).To(Equal("1.1.1.1"))
+			Expect(api.addCalls).To(BeEmpty())
+			Expect(api.deleteCalls).To(BeEmpty())
+		})
+
+		It("records the applied data in status", func() {
+			createRecordCR(nil)
+			api := &fakeRecordAPI{getRecords: noRecords}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			record := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, record)).To(Succeed())
+			Expect(record.Status.AppliedData).To(Equal("1.1.1.1"))
+			Expect(record.Status.AppliedPriority).To(BeNil())
+		})
+
+		It("adds the new data and then deletes the previously applied data on a spec change", func() {
+			createRecordCR(nil)
+			setApplied("9.9.9.9", nil)
+			api := &fakeRecordAPI{getRecords: serverHas("A",
+				technitium.RecordData{IPAddress: "2.2.2.2"},
+				technitium.RecordData{IPAddress: "9.9.9.9"},
+			)}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
 			Expect(api.addCalls).To(HaveLen(1))
 			Expect(api.addCalls[0].IPAddress).To(Equal("1.1.1.1"))
+			Expect(api.deleteCalls).To(HaveLen(1))
+			Expect(api.deleteCalls[0].IPAddress).To(Equal("9.9.9.9"))
+
+			record := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, record)).To(Succeed())
+			Expect(record.Status.AppliedData).To(Equal("1.1.1.1"))
+		})
+
+		It("deletes the previously applied data left behind by an interrupted spec change", func() {
+			// A previous reconcile added 1.1.1.1 but failed (or crashed) before
+			// deleting 9.9.9.9, so status.appliedData still names the old value.
+			createRecordCR(nil)
+			setApplied("9.9.9.9", nil)
+			api := &fakeRecordAPI{getRecords: serverHas("A",
+				technitium.RecordData{IPAddress: "1.1.1.1"},
+				technitium.RecordData{IPAddress: "9.9.9.9"},
+			)}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.addCalls).To(BeEmpty())
+			Expect(api.deleteCalls).To(HaveLen(1))
+			Expect(api.deleteCalls[0].IPAddress).To(Equal("9.9.9.9"))
+
+			record := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, record)).To(Succeed())
+			Expect(record.Status.AppliedData).To(Equal("1.1.1.1"))
+		})
+
+		It("keeps the previously applied data in status when deleting it fails", func() {
+			createRecordCR(nil)
+			setApplied("9.9.9.9", nil)
+			api := &fakeRecordAPI{
+				getRecords: serverHas("A", technitium.RecordData{IPAddress: "9.9.9.9"}),
+				deleteErr:  fmt.Errorf("server unreachable"),
+			}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).To(HaveOccurred())
+			Expect(api.addCalls).To(HaveLen(1))
+
+			record := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, record)).To(Succeed())
+			Expect(record.Status.AppliedData).To(Equal("9.9.9.9"))
+		})
+
+		It("deletes the previously applied MX record when only the priority changes", func() {
+			oldPref, newPref := int32(10), int32(20)
+			createRecordCR(func(rec *dnsv1alpha1.Record) {
+				rec.Spec.Type = dnsv1alpha1.RecordTypeMX
+				rec.Spec.Data = "mail.example.com"
+				rec.Spec.Priority = &newPref
+			})
+			setApplied("mail.example.com", &oldPref)
+			api := &fakeRecordAPI{getRecords: serverHas("MX",
+				technitium.RecordData{Exchange: "mail.example.com", Preference: oldPref},
+			)}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.addCalls).To(HaveLen(1))
+			Expect(*api.addCalls[0].Preference).To(Equal(newPref))
+			Expect(api.deleteCalls).To(HaveLen(1))
+			Expect(*api.deleteCalls[0].Preference).To(Equal(oldPref))
+
+			record := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, record)).To(Succeed())
+			Expect(*record.Status.AppliedPriority).To(Equal(newPref))
+		})
+
+		It("corrects CNAME drift by deleting and recreating the record", func() {
+			createRecordCR(func(rec *dnsv1alpha1.Record) {
+				rec.Spec.Type = dnsv1alpha1.RecordTypeCNAME
+				rec.Spec.Data = "target.example.com"
+			})
+			api := &fakeRecordAPI{getRecords: serverHas("CNAME", technitium.RecordData{CName: "stale.example.com"})}
+
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.deleteCalls).To(HaveLen(1))
+			Expect(api.deleteCalls[0].CName).To(Equal("stale.example.com"))
+			Expect(api.addCalls).To(HaveLen(1))
+			Expect(api.addCalls[0].CName).To(Equal("target.example.com"))
 			Expect(api.updateCalls).To(BeEmpty())
+		})
+
+		It("deletes the applied data, not the unreconciled spec data, on delete", func() {
+			createRecordCR(nil)
+			api := &fakeRecordAPI{getRecords: noRecords}
+			_, err := newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			// Change spec.data and delete before the change is reconciled: the
+			// server still holds the originally applied 1.1.1.1.
+			resource := &dnsv1alpha1.Record{}
+			Expect(k8sClient.Get(ctx, key, resource)).To(Succeed())
+			resource.Spec.Data = "3.3.3.3"
+			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			_, err = newReconciler(api).Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(api.deleteCalls).To(HaveLen(1))
+			Expect(api.deleteCalls[0].IPAddress).To(Equal("1.1.1.1"))
 		})
 
 		It("surfaces and records an error when the server call fails", func() {
