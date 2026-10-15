@@ -280,6 +280,31 @@ func TestDeletePrimaryCluster(t *testing.T) {
 	}
 }
 
+func TestUpdateNodeIPAddresses(t *testing.T) {
+	var gotPath string
+	var gotParams url.Values
+	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotParams = r.URL.Query()
+		_, _ = w.Write([]byte(`{"response":{"clusterInitialized":true,"clusterNodes":[` +
+			`{"id":2,"name":"dns-1.c","ipAddresses":["10.0.0.9"],"type":"Secondary","state":"Self"}]},"status":"ok"}`))
+	})
+
+	state, err := c.UpdateNodeIPAddresses(context.Background(), []string{"10.0.0.9", "fd00::9"})
+	if err != nil {
+		t.Fatalf("UpdateNodeIPAddresses: %v", err)
+	}
+	if gotPath != "/api/admin/cluster/updateIpAddress" {
+		t.Errorf("path = %q, want /api/admin/cluster/updateIpAddress", gotPath)
+	}
+	if got := gotParams.Get("ipAddresses"); got != "10.0.0.9,fd00::9" {
+		t.Errorf("ipAddresses param = %q, want 10.0.0.9,fd00::9", got)
+	}
+	if len(state.Nodes) != 1 || state.Nodes[0].IPAddresses[0] != "10.0.0.9" {
+		t.Errorf("state nodes = %+v, want the returned self node", state.Nodes)
+	}
+}
+
 func TestLeaveCluster(t *testing.T) {
 	var gotParams url.Values
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {

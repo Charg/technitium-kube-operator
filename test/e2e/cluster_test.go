@@ -11,6 +11,8 @@ the full license text.
 package e2e
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -190,4 +192,80 @@ func restartPodAndAwaitReconnect(clusterName, pod string, replicas int) {
 		}
 		g.Expect(stable).To(BeNumerically(">=", 3), "cluster not converged: %s", output)
 	}, 8*time.Minute, 10*time.Second).Should(Succeed())
+
+	// The Primary's view alone is not enough: after a Primary restart the
+	// Primary can see every Secondary Connected (it dials them) while every
+	// Secondary still holds the Primary's old IP and sees it Unreachable, so
+	// config sync is silently broken. Assert every node's own view too: each
+	// member is Self/Connected and recorded at its pod's current IP.
+	By("verifying every node's own view lists every member as Connected at its current pod IP")
+	Eventually(func(g Gomega) {
+		for i := 0; i < replicas; i++ {
+			observer := fmt.Sprintf("%s-%d", clusterName, i)
+			view := nodeOwnClusterView(clusterName, observer)
+			g.Expect(view).To(HaveLen(replicas), "%s sees %d members", observer, len(view))
+			for j := 0; j < replicas; j++ {
+				member := fmt.Sprintf("%s-%d", clusterName, j)
+				var found bool
+				for _, n := range view {
+					if !strings.HasPrefix(n.Name, member+".") {
+						continue
+					}
+					found = true
+					g.Expect(n.State).To(Or(Equal("Self"), Equal("Connected")),
+						"%s sees %s as %s", observer, member, n.State)
+					g.Expect(n.IPAddresses).To(ConsistOf(podIP(member)),
+						"%s has a stale IP recorded for %s", observer, member)
+				}
+				g.Expect(found).To(BeTrue(), "%s does not list %s", observer, member)
+			}
+		}
+	}, 5*time.Minute, 10*time.Second).Should(Succeed())
+}
+
+// clusterViewNode is one member of /api/admin/cluster/state as a single node
+// reports it.
+type clusterViewNode struct {
+	Name        string   `json:"name"`
+	State       string   `json:"state"`
+	IPAddresses []string `json:"ipAddresses"`
+}
+
+// nodeOwnClusterView asks a single Technitium pod for its own
+// /api/admin/cluster/state by exec'ing into it (the image ships bash, so the
+// call is made over /dev/tcp) and returns that node's view of the members.
+func nodeOwnClusterView(clusterName, pod string) []clusterViewNode {
+	secret := clusterName + "-admin"
+	get := func(key string) string {
+		cmd := exec.Command("kubectl", "get", "secret", secret, "-n", namespace,
+			"-o", "jsonpath={.data."+key+"}")
+		out, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(out))
+		Expect(err).NotTo(HaveOccurred())
+		return string(decoded)
+	}
+	script := `
+http_get() {
+  exec 3<>/dev/tcp/127.0.0.1/5380
+  printf 'GET %s HTTP/1.0\r\nHost: localhost\r\n\r\n' "$1" >&3
+  cat <&3
+  exec 3<&-
+}
+token=$(http_get "/api/user/login?user=$TUSER&pass=$TPASS" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+http_get "/api/admin/cluster/state?token=$token" | tail -n 1
+`
+	cmd := exec.Command("kubectl", "exec", pod, "-n", namespace, "--",
+		"env", "TUSER="+get("username"), "TPASS="+get("password"), "bash", "-c", script)
+	out, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "failed to read cluster state from %s", pod)
+
+	var body struct {
+		Response struct {
+			ClusterNodes []clusterViewNode `json:"clusterNodes"`
+		} `json:"response"`
+	}
+	Expect(json.Unmarshal([]byte(strings.TrimSpace(out)), &body)).To(Succeed(), "bad state body from %s: %q", pod, out)
+	_, _ = fmt.Fprintf(GinkgoWriter, "%s own view: %+v\n", pod, body.Response.ClusterNodes)
+	return body.Response.ClusterNodes
 }
