@@ -10,6 +10,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -200,6 +201,15 @@ func (g *rolloutGate) check(ctx context.Context, ordinal int32) (ok bool, why st
 			member := findClusterMember(ps.Nodes, name)
 			if member == nil || member.State != connectedClusterState {
 				return false, "it is not Connected in the Primary's cluster state"
+			}
+			// Right after a restart the Primary can still list the node as
+			// Connected from before it went down. Only trust an entry that
+			// carries the new pod's IP and was seen since that pod became Ready.
+			if !slices.Contains(member.IPAddresses, pod.ip) {
+				return false, "the Primary has not yet recorded its new pod IP"
+			}
+			if !pod.readySince.IsZero() && (member.LastSeen == nil || !member.LastSeen.After(pod.readySince)) {
+				return false, "the Primary has not seen it since its pod restarted"
 			}
 		}
 	}

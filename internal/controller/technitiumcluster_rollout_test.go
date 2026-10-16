@@ -41,6 +41,29 @@ type rolloutFake struct {
 	name      string
 	versions  map[int32]string
 	connected map[int32]bool
+	// staleIP and staleSeen make the Primary still list an ordinal as
+	// Connected from before its pod restarted, the way it does in the moments
+	// after a node goes down: at its old IP, or last seen an hour ago.
+	staleIP   map[int32]bool
+	staleSeen map[int32]bool
+	// ipPushes counts UpdateNodeIPAddresses calls per ordinal. The fake
+	// leaves the Primary's view stale, as if it had not yet processed them.
+	ipPushes map[int32]int
+}
+
+func (f *rolloutFake) pushes(ordinal int32) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ipPushes[ordinal]
+}
+
+func (f *rolloutFake) setStale(ordinal int32, ip, seen bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.staleIP == nil {
+		f.staleIP, f.staleSeen = map[int32]bool{}, map[int32]bool{}
+	}
+	f.staleIP[ordinal], f.staleSeen[ordinal] = ip, seen
 }
 
 func (f *rolloutFake) setVersion(ordinal int32, v string) {
@@ -84,12 +107,20 @@ func (n *rolloutFakeNode) GetClusterState(ctx context.Context) (*technitium.Clus
 			Version:          f.versions[o],
 			State:            "Connected",
 			ConfigLastSynced: &now,
+			LastSeen:         &now,
 		}
 		if o == 0 {
 			node.Type = "Primary"
 		}
 		if !f.connected[o] {
 			node.State = "Unknown"
+		}
+		if f.staleIP[o] {
+			node.IPAddresses = []string{"10.9.9.9"}
+		}
+		if f.staleSeen[o] {
+			longAgo := now.Add(-time.Hour)
+			node.LastSeen = &longAgo
 		}
 		if o == n.ordinal {
 			node.State = "Self"
@@ -118,7 +149,14 @@ func (n *rolloutFakeNode) DeletePrimaryCluster(context.Context, bool) error {
 	return nil
 }
 func (n *rolloutFakeNode) UpdateNodeIPAddresses(context.Context, []string) (*technitium.ClusterState, error) {
-	return nil, errors.New("UpdateNodeIPAddresses must not be called")
+	f := n.shared
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ipPushes == nil {
+		f.ipPushes = map[int32]int{}
+	}
+	f.ipPushes[n.ordinal]++
+	return nil, nil
 }
 
 var _ = Describe("TechnitiumCluster Controller upgrade rollout", func() {
@@ -226,7 +264,9 @@ var _ = Describe("TechnitiumCluster Controller upgrade rollout", func() {
 		if ready {
 			status = corev1.ConditionTrue
 		}
-		pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}
+		pod.Status.Conditions = []corev1.PodCondition{{
+			Type: corev1.PodReady, Status: status, LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Minute)),
+		}}
 		Expect(k8sClient.Status().Update(ctx, &pod)).To(Succeed())
 	}
 
@@ -419,6 +459,29 @@ var _ = Describe("TechnitiumCluster Controller upgrade rollout", func() {
 			reconcileOnce()
 			Expect(partition()).To(Equal(int32(1)))
 		})
+
+		DescribeTable("does not trust a Connected entry left over from before the node restarted",
+			func(staleIP, staleSeen bool) {
+				setImage(newImage)
+				reconcileOnce()
+				setStsStatus(3, "rev-1", "rev-2")
+				reconcileOnce()
+
+				finishNode(2, "rev-2", newVersion)
+				fake.setStale(2, staleIP, staleSeen)
+				reconcileOnce()
+				Expect(partition()).To(Equal(int32(2)))
+				if staleIP {
+					Expect(fake.pushes(2)).To(BeNumerically(">", 0), "the node's new IP should be pushed to the Primary again")
+				}
+
+				fake.setStale(2, false, false)
+				reconcileOnce()
+				Expect(partition()).To(Equal(int32(1)))
+			},
+			Entry("still at its old IP", true, false),
+			Entry("last seen before its pod became Ready", false, true),
+		)
 
 		It("does not release the Primary until the last Secondary is Connected", func() {
 			setImage(newImage)

@@ -721,6 +721,8 @@ type clusterPodInfo struct {
 	// revision is the pod's controller-revision-hash: the StatefulSet
 	// revision whose template the pod was created from.
 	revision string
+	// readySince is when the pod last became Ready, zero when unknown.
+	readySince time.Time
 }
 
 // resolveClusterPods reads every desired ordinal's Pod IP and readiness.
@@ -747,16 +749,19 @@ func (r *TechnitiumClusterReconciler) resolveClusterPods(ctx context.Context, tc
 			continue
 		}
 		ready := false
+		var readySince time.Time
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 				ready = true
+				readySince = cond.LastTransitionTime.Time
 				break
 			}
 		}
 		pods[i] = clusterPodInfo{
-			ip:       pod.Status.PodIP,
-			ready:    ready && pod.Status.PodIP != "",
-			revision: pod.Labels[appsv1.ControllerRevisionHashLabelKey],
+			ip:         pod.Status.PodIP,
+			ready:      ready && pod.Status.PodIP != "",
+			revision:   pod.Labels[appsv1.ControllerRevisionHashLabelKey],
+			readySince: readySince,
 		}
 	}
 	return pods, nil
@@ -836,7 +841,7 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 	// and the node domain is deliberately unresolvable so nothing re-learns
 	// it. Correct the primary here, before the secondaries: the primary
 	// pushes its new address to every secondary itself.
-	if err := r.refreshNodeIP(ctx, tc, primaryOrdinal, primaryClient, primaryState, primaryPod.ip); err != nil {
+	if err := r.refreshNodeIP(ctx, tc, primaryOrdinal, primaryClient, primaryState, nil, primaryPod.ip); err != nil {
 		return false, err
 	}
 
@@ -875,7 +880,8 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 			continue
 		}
 		if secondaryState.ClusterInitialized {
-			if err := r.refreshNodeIP(ctx, tc, i, secondaryClient, secondaryState, pod.ip); err != nil {
+			primaryView := findClusterMember(primaryState.Nodes, fmt.Sprintf("%s-%d", tc.Name, i))
+			if err := r.refreshNodeIP(ctx, tc, i, secondaryClient, secondaryState, primaryView, pod.ip); err != nil {
 				return false, err
 			}
 			continue
@@ -939,12 +945,19 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 
 // refreshNodeIP repairs a clustered node whose pod was rescheduled onto a new
 // IP. state is that node's own cluster state: its Self entry holds the IP
-// addresses the cluster has recorded for it. When podIP is not among them,
-// the node is told its new address through updateIpAddress, which propagates
-// it to the rest of the cluster (a Secondary tells the Primary, the Primary
-// tells every Secondary), so no per-peer call is needed. A node that has not
-// joined a cluster, or whose state lists no Self entry yet, is left alone.
-func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, ordinal int32, node nodeAPI, state *technitium.ClusterState, podIP string) error {
+// addresses the cluster has recorded for it. primaryView, for a Secondary, is
+// the Primary's entry for it (nil for the Primary itself). When podIP is
+// missing from either, the node is told its address through updateIpAddress,
+// which propagates it to the rest of the cluster (a Secondary tells the
+// Primary, the Primary tells every Secondary), so no per-peer call is needed.
+//
+// The Primary's view is checked as well because a Secondary pushes its new
+// address to the Primary only once and does not retry: if that push fails
+// (the Primary is itself restarting, say), the node's own Self entry is
+// already correct while the Primary keeps dialing the old IP indefinitely.
+// Calling updateIpAddress again re-sends the push. A node that has not joined
+// a cluster, or whose state lists no Self entry yet, is left alone.
+func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, ordinal int32, node nodeAPI, state *technitium.ClusterState, primaryView *technitium.ClusterNode, podIP string) error {
 	if !state.ClusterInitialized {
 		return nil
 	}
@@ -955,7 +968,15 @@ func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dns
 			break
 		}
 	}
-	if self == nil || slices.Contains(self.IPAddresses, podIP) {
+	if self == nil {
+		return nil
+	}
+	previous := self.IPAddresses
+	switch {
+	case !slices.Contains(self.IPAddresses, podIP):
+	case primaryView != nil && !slices.Contains(primaryView.IPAddresses, podIP):
+		previous = primaryView.IPAddresses
+	default:
 		return nil
 	}
 
@@ -963,7 +984,7 @@ func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dns
 		return fmt.Errorf("updating IP address of ordinal %d of %s to %s: %w", ordinal, tc.Name, podIP, err)
 	}
 	logf.FromContext(ctx).Info("Updated Technitium cluster node IP after pod IP changed",
-		"cluster", tc.Name, "ordinal", ordinal, "previous", self.IPAddresses, "current", podIP)
+		"cluster", tc.Name, "ordinal", ordinal, "previous", previous, "current", podIP)
 	return nil
 }
 

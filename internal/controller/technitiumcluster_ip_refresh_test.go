@@ -45,7 +45,11 @@ type fakeIPCluster struct {
 	podPrefix string
 	// recorded is the IP list the cluster holds for each ordinal.
 	recorded map[int32][]string
-	calls    []ipUpdateCall
+	// primaryStale, when set for an ordinal, is what the Primary still
+	// records for it, as when a Secondary's push of its new address to the
+	// Primary was lost. The next UpdateNodeIPAddresses on that node clears it.
+	primaryStale map[int32][]string
+	calls        []ipUpdateCall
 	// updateErr, when set, is returned by every UpdateNodeIPAddresses call.
 	updateErr error
 }
@@ -82,6 +86,9 @@ func (f *fakeIPNode) GetClusterState(ctx context.Context) (*technitium.ClusterSt
 		if o == 0 {
 			node.Type = "Primary"
 		}
+		if stale, ok := f.shared.primaryStale[o]; ok && f.ordinal == 0 && o != 0 {
+			node.IPAddresses = stale
+		}
 		if o == f.ordinal {
 			node.State = "Self"
 		}
@@ -104,6 +111,7 @@ func (f *fakeIPNode) UpdateNodeIPAddresses(ctx context.Context, ipAddresses []st
 		return nil, err
 	}
 	f.shared.recorded[f.ordinal] = ipAddresses
+	delete(f.shared.primaryStale, f.ordinal)
 	f.shared.mu.Unlock()
 	return f.GetClusterState(ctx)
 }
@@ -290,6 +298,23 @@ var _ = Describe("TechnitiumCluster Controller node IP refresh", func() {
 			Expect(k8sClient.Get(ctx, key, &cr)).To(Succeed())
 			Expect(cr.Status.Phase).To(Equal(dnsv1alpha1.TechnitiumClusterPhaseReady))
 			Expect(cr.Status.Members).To(Equal("2/2"))
+		})
+
+		It("re-pushes a Secondary's IP when only the Primary still records the old one", func() {
+			// The Secondary already knows its new IP, but its one-shot push to
+			// the Primary was lost, so the Primary keeps dialing the old one.
+			setPodIP(1, "10.0.0.22")
+			shared.recorded[1] = []string{"10.0.0.22"}
+			shared.primaryStale = map[int32][]string{1: {"10.0.0.2"}}
+
+			r := newReconciler()
+			Expect(reconcileOnce(r)).To(Succeed())
+			Expect(shared.updates()).To(Equal([]ipUpdateCall{
+				{ordinal: 1, ips: []string{"10.0.0.22"}},
+			}))
+
+			Expect(reconcileOnce(r)).To(Succeed())
+			Expect(shared.updates()).To(HaveLen(1), "once the Primary has the new IP nothing more is sent")
 		})
 
 		It("reports the failure when Technitium rejects the IP update", func() {

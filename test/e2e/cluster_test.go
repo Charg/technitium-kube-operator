@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/charg/technitium-operator/internal/technitium"
 	"github.com/charg/technitium-operator/test/testimage"
 	"github.com/charg/technitium-operator/test/utils"
 )
@@ -122,7 +123,15 @@ func expectReportedVersion(name string) {
 
 // expectReportedVersionOf is expectReportedVersion for a specific image.
 func expectReportedVersionOf(name, image string) {
-	wantVersion := strings.TrimPrefix(image, "technitium/dns-server:")
+	// Technitium drops a trailing ".0" when it reports its version (15.6.0
+	// reads "15.6"), so compare parsed versions rather than strings.
+	wantVersion, ok := technitium.ParseImageVersion(image)
+	Expect(ok).To(BeTrue(), "image %s has no version tag", image)
+	sameVersion := func(g Gomega, reported, what string) {
+		v, err := technitium.ParseVersion(reported)
+		g.Expect(err).NotTo(HaveOccurred(), "%s %q is not a version", what, reported)
+		g.Expect(v).To(Equal(wantVersion), "%s %q does not match the image tag", what, reported)
+	}
 
 	Eventually(func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "technitiumcluster", name,
@@ -132,14 +141,14 @@ func expectReportedVersionOf(name, image string) {
 		versions := strings.Fields(output)
 		g.Expect(versions).NotTo(BeEmpty(), "no node reports a version yet")
 		for _, v := range versions {
-			g.Expect(v).To(Equal(wantVersion), "node version does not match the image tag")
+			sameVersion(g, v, "node version")
 		}
 
 		cmd = exec.Command("kubectl", "get", "technitiumcluster", name,
 			"-o", "jsonpath={.status.version}")
 		output, err = utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(output).To(Equal(wantVersion), "status.version does not equal the image tag")
+		sameVersion(g, output, "status.version")
 	}, 2*time.Minute, 5*time.Second).Should(Succeed())
 }
 
