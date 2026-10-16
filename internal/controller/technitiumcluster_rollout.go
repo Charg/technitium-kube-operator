@@ -30,12 +30,11 @@ const defaultUpgradeStallTimeout = 10 * time.Minute
 // Reasons of the Upgrading condition (and of Degraded while it is stalled or
 // refused).
 const (
-	reasonRollingOut      = "RollingOut"
-	reasonUpToDate        = "UpToDate"
-	reasonUpgradeStalled  = "Stalled"
-	reasonDowngradeBlock  = "DowngradeBlocked"
-	degradedUpgradeStall  = "UpgradeStalled"
-	connectedClusterState = "Connected"
+	reasonRollingOut       = "RollingOut"
+	reasonUpToDate         = "UpToDate"
+	reasonUpgradeStalled   = "Stalled"
+	reasonDowngradeBlocked = "DowngradeBlocked"
+	degradedUpgradeStall   = "UpgradeStalled"
 )
 
 // dnsServerContainerName is the Technitium container in the pod template.
@@ -199,7 +198,7 @@ func (g *rolloutGate) check(ctx context.Context, ordinal int32) (ok bool, why st
 		// Without a cluster there is no membership to rejoin.
 		if ps.ClusterInitialized {
 			member := findClusterMember(ps.Nodes, name)
-			if member == nil || member.State != connectedClusterState {
+			if member == nil || member.State != nodeConnectedState {
 				return false, "it is not Connected in the Primary's cluster state"
 			}
 			// Right after a restart the Primary can still list the node as
@@ -225,10 +224,10 @@ func (g *rolloutGate) check(ctx context.Context, ordinal int32) (ok bool, why st
 func (r *TechnitiumClusterReconciler) reconcileRollout(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, out statefulSetOutcome) (rolloutState, error) {
 	state, err := r.walkRollout(ctx, tc, out)
 	if out.downgrade != nil {
-		state.degradedReason = reasonDowngradeBlock
+		state.degradedReason = reasonDowngradeBlocked
 		state.degradedMessage = out.downgrade.message()
 		if state.status == metav1.ConditionFalse {
-			state.reason = reasonDowngradeBlock
+			state.reason = reasonDowngradeBlocked
 			state.message = state.degradedMessage
 		}
 	}
@@ -343,7 +342,7 @@ func (r *TechnitiumClusterReconciler) walkRollout(ctx context.Context, tc *dnsv1
 		pending = next
 		reasons[next] = "its pod has not been recreated on the new revision"
 	case pending < 0:
-		log.Info("Upgrade finished", "cluster", tc.Name, "target", targetLabel)
+		log.Info("Finished TechnitiumCluster upgrade", "cluster", tc.Name, "target", targetLabel)
 		return idle, nil
 	default:
 		// Keep the existing clock while waiting on the same node.
@@ -365,7 +364,7 @@ func (r *TechnitiumClusterReconciler) walkRollout(ctx context.Context, tc *dnsv1
 			targetLabel, node, waited.Truncate(time.Second), reasons[pending])
 		state.degradedReason = degradedUpgradeStall
 		state.degradedMessage = state.message
-		log.Info("Upgrade stalled", "cluster", tc.Name, "node", node, "reason", reasons[pending])
+		log.Info("Stalled TechnitiumCluster upgrade", "cluster", tc.Name, "node", node, "reason", reasons[pending])
 	}
 	return state, nil
 }

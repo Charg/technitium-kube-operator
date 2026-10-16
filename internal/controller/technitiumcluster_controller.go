@@ -1625,6 +1625,9 @@ const (
 	nodeNotReadyState = "NotReady"
 	// nodeSelfState is the state a node reports for its own clusterNodes entry.
 	nodeSelfState = "Self"
+	// nodeConnectedState is the state the Primary reports for a Secondary it
+	// is in contact with.
+	nodeConnectedState = "Connected"
 )
 
 // roleForOrdinal reports the role a StatefulSet ordinal is assumed to hold
@@ -1658,7 +1661,7 @@ func findClusterMember(nodes []technitium.ClusterNode, podName string) *techniti
 // Connected all mean the node is up and reachable.
 func nodeJoined(state string) bool {
 	switch state {
-	case nodeReadyState, nodeSelfState, "Connected":
+	case nodeReadyState, nodeSelfState, nodeConnectedState:
 		return true
 	default:
 		return false
