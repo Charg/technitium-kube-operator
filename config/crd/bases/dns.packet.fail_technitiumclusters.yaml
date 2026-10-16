@@ -24,6 +24,10 @@ spec:
     - jsonPath: .status.version
       name: Version
       type: string
+    - jsonPath: .status.conditions[?(@.type=='Upgrading')].status
+      name: Upgrading
+      priority: 1
+      type: string
     - jsonPath: .status.members
       name: Members
       type: string
@@ -1591,6 +1595,9 @@ spec:
                   - "Available": the instance is reachable and serving
                   - "Progressing": the controller is creating or updating the workload
                   - "Degraded": a reconcile failed, with the cause in reason/message
+                  - "Upgrading": a cluster-aware rollout to a new spec.image is running
+                    (RollingOut), halted (Stalled), refused (DowngradeBlocked), or done
+                    (UpToDate)
 
                   The status of each condition is one of True, False, or Unknown.
                 items:
@@ -1751,6 +1758,23 @@ spec:
                   ready.
                 format: int32
                 type: integer
+              rollout:
+                description: |-
+                  rollout tracks the node an in-flight upgrade is waiting on. It is nil
+                  when no rollout is running.
+                properties:
+                  node:
+                    description: node is the pod currently being upgraded.
+                    type: string
+                  nodeStartedTime:
+                    description: nodeStartedTime is when the operator released that
+                      node for upgrade.
+                    format: date-time
+                    type: string
+                required:
+                - node
+                - nodeStartedTime
+                type: object
               version:
                 description: |-
                   version summarizes the Technitium version across nodes: the version

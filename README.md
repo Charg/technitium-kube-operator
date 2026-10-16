@@ -74,6 +74,20 @@ As a result:
 - DHCP scopes are per node and do not sync. A `DHCPScope` is configured on the Primary only.
 - The web console has the same constraint: reach it through the `<name>-primary` Service (`spec.service.primary`), which also keeps console edits on the Primary. It is unavailable while `<name>-0` is down.
 
+### Upgrading Technitium
+
+Changing `spec.image` performs a cluster-aware rolling upgrade rather than a blind restart. The StatefulSet uses `RollingUpdate` with a partition the operator manages: Secondaries restart one at a time from the highest ordinal down, and the Primary (`<name>-0`) restarts last. The operator releases the next node only once the one just restarted is on the new pod revision and Ready, its own cluster state reports the target version (skipped when the image tag has no parseable version, such as `latest` or a digest), and, for a Secondary, the Primary lists it as `Connected` at its new pod IP and has heard from it since the pod became Ready (right after a restart the Primary still shows the old entry as `Connected`). A single replica is simply replaced.
+
+Progress is reported by the `Upgrading` condition (`kubectl get technitiumcluster -o wide` shows it): `True` with reason `RollingOut` and a message such as `Upgrading tc-2 to 15.6.1 (1/3 nodes updated)`, then `False` with reason `UpToDate`. The `Version` column reads `mixed` while nodes disagree. If the node being upgraded does not pass its gate for 10 minutes, the condition becomes `True` with reason `Stalled` (and `Degraded` gets reason `UpgradeStalled`); the operator releases no further node and resumes by itself if the node recovers. Any other change to the pod template (resources, env, probes) goes through the same gated walk.
+
+Downgrades are refused, because a newer server may have written configuration to the data volume that an older one cannot read. When `spec.image` names an older version than the one deployed, the operator keeps the deployed image and reports `DowngradeBlocked` on the `Upgrading` and `Degraded` conditions. To allow it, annotate the cluster:
+
+```sh
+kubectl annotate technitiumcluster <name> dns.packet.fail/allow-downgrade=true
+```
+
+Versions that cannot be parsed from the image tag are never guarded.
+
 ### Deletion and PVC retention
 
 Deleting a `TechnitiumCluster` is guarded by a finalizer, `dns.packet.fail/cluster-cleanup`, so the operator gets a chance to leave Technitium's own cluster state consistent before the StatefulSet, Services, and generated Secret are garbage collected via their owner references.

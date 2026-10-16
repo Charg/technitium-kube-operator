@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/charg/technitium-operator/internal/technitium"
 	"github.com/charg/technitium-operator/test/testimage"
 	"github.com/charg/technitium-operator/test/utils"
 )
@@ -41,6 +42,12 @@ const clusteredClusterName = "e2e-dns-cluster"
 // server domain once gave every node the same Technitium node name, so every
 // join after the first was refused.
 func deployClusteredTechnitiumCluster(name string, replicas int) {
+	deployClusteredTechnitiumClusterWithImage(name, replicas, testimage.TechnitiumImage)
+}
+
+// deployClusteredTechnitiumClusterWithImage is deployClusteredTechnitiumCluster
+// for a specific Technitium image, which upgrade specs start on an older one.
+func deployClusteredTechnitiumClusterWithImage(name string, replicas int, image string) {
 	manifest := fmt.Sprintf(`
 apiVersion: dns.packet.fail/v1alpha1
 kind: TechnitiumCluster
@@ -52,7 +59,7 @@ spec:
   dnsServerDomain: dns.e2e.test
   storage:
     size: 1Gi
-`, name, testimage.TechnitiumImage, replicas)
+`, name, image, replicas)
 	applyManifest("cluster-"+name, manifest)
 
 	// Clustering is the slowest step in the suite: it only starts once every
@@ -102,7 +109,7 @@ spec:
 	Expect(err).NotTo(HaveOccurred())
 	Expect(output).To(Equal("True"), "pod %s is not Ready under the health check probe", pod)
 
-	expectReportedVersion(name)
+	expectReportedVersionOf(name, image)
 }
 
 // expectReportedVersion asserts every node of the named TechnitiumCluster
@@ -111,7 +118,20 @@ spec:
 // versions come from the live Technitium servers, so a match proves the
 // operator read them rather than echoing the spec.
 func expectReportedVersion(name string) {
-	wantVersion := strings.TrimPrefix(testimage.TechnitiumImage, "technitium/dns-server:")
+	expectReportedVersionOf(name, testimage.TechnitiumImage)
+}
+
+// expectReportedVersionOf is expectReportedVersion for a specific image.
+func expectReportedVersionOf(name, image string) {
+	// Technitium drops a trailing ".0" when it reports its version (15.6.0
+	// reads "15.6"), so compare parsed versions rather than strings.
+	wantVersion, ok := technitium.ParseImageVersion(image)
+	Expect(ok).To(BeTrue(), "image %s has no version tag", image)
+	sameVersion := func(g Gomega, reported, what string) {
+		v, err := technitium.ParseVersion(reported)
+		g.Expect(err).NotTo(HaveOccurred(), "%s %q is not a version", what, reported)
+		g.Expect(v).To(Equal(wantVersion), "%s %q does not match the image tag", what, reported)
+	}
 
 	Eventually(func(g Gomega) {
 		cmd := exec.Command("kubectl", "get", "technitiumcluster", name,
@@ -121,14 +141,14 @@ func expectReportedVersion(name string) {
 		versions := strings.Fields(output)
 		g.Expect(versions).NotTo(BeEmpty(), "no node reports a version yet")
 		for _, v := range versions {
-			g.Expect(v).To(Equal(wantVersion), "node version does not match the image tag")
+			sameVersion(g, v, "node version")
 		}
 
 		cmd = exec.Command("kubectl", "get", "technitiumcluster", name,
 			"-o", "jsonpath={.status.version}")
 		output, err = utils.Run(cmd)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(output).To(Equal(wantVersion), "status.version does not equal the image tag")
+		sameVersion(g, output, "status.version")
 	}, 2*time.Minute, 5*time.Second).Should(Succeed())
 }
 

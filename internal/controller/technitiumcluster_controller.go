@@ -10,7 +10,9 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -21,6 +23,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -235,6 +238,12 @@ type TechnitiumClusterReconciler struct {
 	// production wiring leaves it nil and nodeClientFactory supplies a real,
 	// self-authenticating client.
 	NewNodeClient func(endpoint, username, password string) (nodeAPI, error)
+	// StallTimeout is how long an upgrading node may fail its gate before the
+	// rollout is reported as Stalled. Zero means defaultUpgradeStallTimeout.
+	StallTimeout time.Duration
+	// Now is the clock the stall timer reads. Nil means time.Now; tests
+	// inject one to cross the timeout without waiting.
+	Now func() time.Time
 }
 
 // bootstrapClientFactory returns r.NewBootstrapClient, defaulting it to a
@@ -327,7 +336,7 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	sts, err := r.reconcileWorkload(ctx, &tc)
+	workload, err := r.reconcileWorkload(ctx, &tc)
 	if err != nil {
 		log.Error(err, "Failed to reconcile TechnitiumCluster workload", "cluster", tc.Name)
 		if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
@@ -336,6 +345,7 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, err
 	}
 
+	sts := workload.sts
 	desiredReplicas := int32(1)
 	if tc.Spec.Replicas != nil {
 		desiredReplicas = *tc.Spec.Replicas
@@ -379,7 +389,19 @@ func (r *TechnitiumClusterReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
-	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts, endpoint, bootstrapped, clustered)
+	// The rollout step runs after clustering so a restarted node's IP has
+	// already been corrected, and its Connected state is as fresh as it gets,
+	// when the gate reads it.
+	rollout, err := r.reconcileRollout(ctx, &tc, workload)
+	if err != nil {
+		log.Error(err, "Failed to reconcile TechnitiumCluster rollout", "cluster", tc.Name)
+		if statusErr := r.markDegraded(ctx, req.NamespacedName, err); statusErr != nil {
+			log.Error(statusErr, "Failed to update TechnitiumCluster status", "cluster", tc.Name)
+		}
+		return ctrl.Result{}, err
+	}
+
+	requeueAfter, err := r.updateStatus(ctx, req.NamespacedName, sts, endpoint, bootstrapped, clustered, rollout)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -696,6 +718,11 @@ func clusterDomainFor(tc *dnsv1alpha1.TechnitiumCluster) string {
 type clusterPodInfo struct {
 	ip    string
 	ready bool
+	// revision is the pod's controller-revision-hash: the StatefulSet
+	// revision whose template the pod was created from.
+	revision string
+	// readySince is when the pod last became Ready, zero when unknown.
+	readySince time.Time
 }
 
 // resolveClusterPods reads every desired ordinal's Pod IP and readiness.
@@ -722,13 +749,20 @@ func (r *TechnitiumClusterReconciler) resolveClusterPods(ctx context.Context, tc
 			continue
 		}
 		ready := false
+		var readySince time.Time
 		for _, cond := range pod.Status.Conditions {
 			if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
 				ready = true
+				readySince = cond.LastTransitionTime.Time
 				break
 			}
 		}
-		pods[i] = clusterPodInfo{ip: pod.Status.PodIP, ready: ready && pod.Status.PodIP != ""}
+		pods[i] = clusterPodInfo{
+			ip:         pod.Status.PodIP,
+			ready:      ready && pod.Status.PodIP != "",
+			revision:   pod.Labels[appsv1.ControllerRevisionHashLabelKey],
+			readySince: readySince,
+		}
 	}
 	return pods, nil
 }
@@ -807,7 +841,7 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 	// and the node domain is deliberately unresolvable so nothing re-learns
 	// it. Correct the primary here, before the secondaries: the primary
 	// pushes its new address to every secondary itself.
-	if err := r.refreshNodeIP(ctx, tc, primaryOrdinal, primaryClient, primaryState, primaryPod.ip); err != nil {
+	if err := r.refreshNodeIP(ctx, tc, primaryOrdinal, primaryClient, primaryState, nil, primaryPod.ip); err != nil {
 		return false, err
 	}
 
@@ -846,7 +880,8 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 			continue
 		}
 		if secondaryState.ClusterInitialized {
-			if err := r.refreshNodeIP(ctx, tc, i, secondaryClient, secondaryState, pod.ip); err != nil {
+			primaryView := findClusterMember(primaryState.Nodes, fmt.Sprintf("%s-%d", tc.Name, i))
+			if err := r.refreshNodeIP(ctx, tc, i, secondaryClient, secondaryState, primaryView, pod.ip); err != nil {
 				return false, err
 			}
 			continue
@@ -910,12 +945,19 @@ func (r *TechnitiumClusterReconciler) reconcileClustering(ctx context.Context, t
 
 // refreshNodeIP repairs a clustered node whose pod was rescheduled onto a new
 // IP. state is that node's own cluster state: its Self entry holds the IP
-// addresses the cluster has recorded for it. When podIP is not among them,
-// the node is told its new address through updateIpAddress, which propagates
-// it to the rest of the cluster (a Secondary tells the Primary, the Primary
-// tells every Secondary), so no per-peer call is needed. A node that has not
-// joined a cluster, or whose state lists no Self entry yet, is left alone.
-func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, ordinal int32, node nodeAPI, state *technitium.ClusterState, podIP string) error {
+// addresses the cluster has recorded for it. primaryView, for a Secondary, is
+// the Primary's entry for it (nil for the Primary itself). When podIP is
+// missing from either, the node is told its address through updateIpAddress,
+// which propagates it to the rest of the cluster (a Secondary tells the
+// Primary, the Primary tells every Secondary), so no per-peer call is needed.
+//
+// The Primary's view is checked as well because a Secondary pushes its new
+// address to the Primary only once and does not retry: if that push fails
+// (the Primary is itself restarting, say), the node's own Self entry is
+// already correct while the Primary keeps dialing the old IP indefinitely.
+// Calling updateIpAddress again re-sends the push. A node that has not joined
+// a cluster, or whose state lists no Self entry yet, is left alone.
+func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster, ordinal int32, node nodeAPI, state *technitium.ClusterState, primaryView *technitium.ClusterNode, podIP string) error {
 	if !state.ClusterInitialized {
 		return nil
 	}
@@ -926,7 +968,15 @@ func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dns
 			break
 		}
 	}
-	if self == nil || slices.Contains(self.IPAddresses, podIP) {
+	if self == nil {
+		return nil
+	}
+	previous := self.IPAddresses
+	switch {
+	case !slices.Contains(self.IPAddresses, podIP):
+	case primaryView != nil && !slices.Contains(primaryView.IPAddresses, podIP):
+		previous = primaryView.IPAddresses
+	default:
 		return nil
 	}
 
@@ -934,43 +984,43 @@ func (r *TechnitiumClusterReconciler) refreshNodeIP(ctx context.Context, tc *dns
 		return fmt.Errorf("updating IP address of ordinal %d of %s to %s: %w", ordinal, tc.Name, podIP, err)
 	}
 	logf.FromContext(ctx).Info("Updated Technitium cluster node IP after pod IP changed",
-		"cluster", tc.Name, "ordinal", ordinal, "previous", self.IPAddresses, "current", podIP)
+		"cluster", tc.Name, "ordinal", ordinal, "previous", previous, "current", podIP)
 	return nil
 }
 
 // reconcileWorkload brings the headless Service, client Service, admin
 // Secret, and StatefulSet in line with the spec, creating anything absent. It
-// returns the reconciled StatefulSet so the caller can read its observed
-// readyReplicas without a second fetch.
-func (r *TechnitiumClusterReconciler) reconcileWorkload(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*appsv1.StatefulSet, error) {
+// returns the reconciled StatefulSet, with what happened to it, so the caller
+// can read its observed readyReplicas without a second fetch.
+func (r *TechnitiumClusterReconciler) reconcileWorkload(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (statefulSetOutcome, error) {
 	if err := r.reconcileHeadlessService(ctx, tc); err != nil {
-		return nil, fmt.Errorf("reconciling headless service: %w", err)
+		return statefulSetOutcome{}, fmt.Errorf("reconciling headless service: %w", err)
 	}
 	if err := r.reconcileClientService(ctx, tc); err != nil {
-		return nil, fmt.Errorf("reconciling client service: %w", err)
+		return statefulSetOutcome{}, fmt.Errorf("reconciling client service: %w", err)
 	}
 	if err := r.reconcileReplicaServices(ctx, tc); err != nil {
-		return nil, fmt.Errorf("reconciling per-replica services: %w", err)
+		return statefulSetOutcome{}, fmt.Errorf("reconciling per-replica services: %w", err)
 	}
 	if err := r.reconcilePrimaryService(ctx, tc); err != nil {
-		return nil, fmt.Errorf("reconciling primary service: %w", err)
+		return statefulSetOutcome{}, fmt.Errorf("reconciling primary service: %w", err)
 	}
 	// A caller-supplied adminSecretRef means the credentials are managed
 	// outside this controller; generating one anyway would fight whatever
 	// owns that Secret.
 	if tc.Spec.AdminSecretRef == nil {
 		if err := r.reconcileAdminSecret(ctx, tc); err != nil {
-			return nil, fmt.Errorf("reconciling admin secret: %w", err)
+			return statefulSetOutcome{}, fmt.Errorf("reconciling admin secret: %w", err)
 		}
 	}
-	sts, err := r.reconcileStatefulSet(ctx, tc)
+	workload, err := r.reconcileStatefulSet(ctx, tc)
 	if err != nil {
-		return nil, fmt.Errorf("reconciling statefulset: %w", err)
+		return statefulSetOutcome{}, fmt.Errorf("reconciling statefulset: %w", err)
 	}
 	if err := r.reconcilePodDisruptionBudget(ctx, tc); err != nil {
-		return nil, fmt.Errorf("reconciling pod disruption budget: %w", err)
+		return statefulSetOutcome{}, fmt.Errorf("reconciling pod disruption budget: %w", err)
 	}
-	return sts, nil
+	return workload, nil
 }
 
 // instanceLabels is the selector subset used on the StatefulSet, both
@@ -1170,15 +1220,51 @@ func generatePassword() (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
+// statefulSetOutcome is what reconcileStatefulSet did, as far as the rollout
+// step cares.
+type statefulSetOutcome struct {
+	sts *appsv1.StatefulSet
+	// templateChanged is true when this pass rewrote the pod template, which
+	// starts a gated rollout.
+	templateChanged bool
+	// downgrade is set when spec.image was refused and the deployed image kept.
+	downgrade *downgradeBlock
+}
+
+// podTemplateHashAnnotation records a hash of the pod template the operator
+// last wrote. Comparing it, rather than the live template, spots a spec change
+// without tripping over fields the API server defaults.
+const podTemplateHashAnnotation = "dns.packet.fail/pod-template-hash"
+
 // reconcileStatefulSet ensures the StatefulSet running Technitium exists and
-// matches spec. Only replicas and the pod template are re-asserted on update:
-// selector, serviceName, and volumeClaimTemplates are immutable once the
-// StatefulSet is created, so touching them again would just turn a routine
-// drift-correction into a failed update.
-func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (*appsv1.StatefulSet, error) {
+// matches spec. Only replicas, the pod template and the update strategy are
+// re-asserted on update: selector, serviceName, and volumeClaimTemplates are
+// immutable once the StatefulSet is created, so touching them again would just
+// turn a routine drift-correction into a failed update.
+//
+// The update strategy is RollingUpdate with an operator-managed partition. A
+// template change parks the partition at the replica count, so no pod
+// restarts; reconcileRollout then lowers it one ordinal at a time. Otherwise
+// the partition is left as the rollout step set it.
+func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, tc *dnsv1alpha1.TechnitiumCluster) (statefulSetOutcome, error) {
 	sts := &appsv1.StatefulSet{
 		Name:      statefulSetName(tc.Name),
 		Namespace: r.OperatorNamespace}
+	out := statefulSetOutcome{sts: sts}
+
+	// A refused downgrade keeps the deployed image and still applies every
+	// other spec change.
+	effective := tc
+	var existing appsv1.StatefulSet
+	if err := r.Get(ctx, client.ObjectKeyFromObject(sts), &existing); err == nil {
+		out.downgrade = checkDowngrade(tc, &existing)
+	} else if !apierrors.IsNotFound(err) {
+		return out, err
+	}
+	if out.downgrade != nil {
+		effective = tc.DeepCopy()
+		effective.Spec.Image = out.downgrade.image
+	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sts, func() error {
 		if err := controllerutil.SetControllerReference(tc, sts, r.Scheme); err != nil {
@@ -1190,17 +1276,57 @@ func (r *TechnitiumClusterReconciler) reconcileStatefulSet(ctx context.Context, 
 		if tc.Spec.Replicas != nil {
 			replicas = *tc.Spec.Replicas
 		}
-		sts.Spec.Replicas = &replicas
-		sts.Spec.Template = podTemplateFor(tc, r.OperatorNamespace)
+		template := podTemplateFor(effective, r.OperatorNamespace)
+		hash := hashPodTemplate(template)
 
-		if sts.CreationTimestamp.IsZero() {
+		created := sts.CreationTimestamp.IsZero()
+		previous := sts.Annotations[podTemplateHashAnnotation]
+		out.templateChanged = !created && previous != "" && previous != hash
+
+		// Partition: 0 on creation (every pod is new) and for a single
+		// replica (a plain replace); parked at the replica count when the
+		// template changes; otherwise kept, clamped after a scale-down.
+		partition := int32(0)
+		switch {
+		case created || replicas <= 1:
+		case out.templateChanged:
+			partition = replicas
+		case sts.Spec.UpdateStrategy.RollingUpdate != nil && sts.Spec.UpdateStrategy.RollingUpdate.Partition != nil:
+			partition = min(*sts.Spec.UpdateStrategy.RollingUpdate.Partition, replicas)
+		}
+
+		sts.Annotations = mergeAnnotation(sts.Annotations, podTemplateHashAnnotation, hash)
+		sts.Spec.Replicas = &replicas
+		sts.Spec.Template = template
+		sts.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{
+			Type:          appsv1.RollingUpdateStatefulSetStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{Partition: &partition},
+		}
+
+		if created {
 			sts.Spec.ServiceName = headlessServiceName(tc.Name)
 			sts.Spec.Selector = &metav1.LabelSelector{MatchLabels: instanceLabels(tc.Name)}
 			sts.Spec.VolumeClaimTemplates = []corev1.PersistentVolumeClaim{volumeClaimTemplateFor(tc)}
 		}
 		return nil
 	})
-	return sts, err
+	return out, err
+}
+
+func mergeAnnotation(annotations map[string]string, key, value string) map[string]string {
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[key] = value
+	return annotations
+}
+
+// hashPodTemplate is a short stable digest of a pod template as built by
+// podTemplateFor.
+func hashPodTemplate(t corev1.PodTemplateSpec) string {
+	raw, _ := json.Marshal(t)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:8])
 }
 
 // podTemplateFor builds the Technitium pod template from spec. It is rebuilt
@@ -1360,7 +1486,7 @@ func volumeClaimTemplateFor(tc *dnsv1alpha1.TechnitiumCluster) corev1.Persistent
 // up or still awaiting bootstrap, long once the instance is fully Ready,
 // since readiness and bootstrap progress are only worth polling for quickly
 // in the former cases.
-func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet, endpoint string, bootstrapped, clustered bool) (time.Duration, error) {
+func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key client.ObjectKey, sts *appsv1.StatefulSet, endpoint string, bootstrapped, clustered bool, rollout rolloutState) (time.Duration, error) {
 	var tc dnsv1alpha1.TechnitiumCluster
 	if err := r.Get(ctx, key, &tc); err != nil {
 		return 0, client.IgnoreNotFound(err)
@@ -1469,7 +1595,19 @@ func (r *TechnitiumClusterReconciler) updateStatus(ctx context.Context, key clie
 
 	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionProgressing, progressingStatus, reason, message) || changed
 	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionAvailable, availableStatus, reason, message) || changed
-	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionFalse, reason, message) || changed
+	if rollout.degradedReason != "" {
+		changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionTrue, rollout.degradedReason, rollout.degradedMessage) || changed
+	} else {
+		changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionDegraded, metav1.ConditionFalse, reason, message) || changed
+	}
+	changed = setClusterCondition(&tc, dnsv1alpha1.TechnitiumClusterConditionUpgrading, rollout.status, rollout.reason, rollout.message) || changed
+	if !equality.Semantic.DeepEqual(tc.Status.Rollout, rollout.bookmark) {
+		tc.Status.Rollout = rollout.bookmark
+		changed = true
+	}
+	if rollout.status == metav1.ConditionTrue {
+		requeueAfter = min(requeueAfter, clusterPollInterval)
+	}
 
 	if !changed {
 		return requeueAfter, nil
@@ -1487,6 +1625,9 @@ const (
 	nodeNotReadyState = "NotReady"
 	// nodeSelfState is the state a node reports for its own clusterNodes entry.
 	nodeSelfState = "Self"
+	// nodeConnectedState is the state the Primary reports for a Secondary it
+	// is in contact with.
+	nodeConnectedState = "Connected"
 )
 
 // roleForOrdinal reports the role a StatefulSet ordinal is assumed to hold
@@ -1520,7 +1661,7 @@ func findClusterMember(nodes []technitium.ClusterNode, podName string) *techniti
 // Connected all mean the node is up and reachable.
 func nodeJoined(state string) bool {
 	switch state {
-	case nodeReadyState, nodeSelfState, "Connected":
+	case nodeReadyState, nodeSelfState, nodeConnectedState:
 		return true
 	default:
 		return false

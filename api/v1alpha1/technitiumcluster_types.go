@@ -83,6 +83,19 @@ const (
 	// TechnitiumClusterConditionDegraded reports that a reconcile failed, with
 	// the cause in reason/message.
 	TechnitiumClusterConditionDegraded = "Degraded"
+	// TechnitiumClusterConditionUpgrading reports a rolling upgrade of the
+	// nodes to the version in spec.image. True means a rollout is in flight
+	// (reason RollingOut) or halted on a node that does not come back
+	// (reason Stalled); False means every node runs the target (reason
+	// UpToDate) or the requested image was refused (reason DowngradeBlocked).
+	TechnitiumClusterConditionUpgrading = "Upgrading"
+
+	// AllowDowngradeAnnotation, set to "true" on a TechnitiumCluster, lets
+	// spec.image move to an older Technitium version than the one deployed.
+	// Without it the operator keeps the deployed image: a newer server may
+	// have written configuration on the data volume that an older one cannot
+	// read.
+	AllowDowngradeAnnotation = "dns.packet.fail/allow-downgrade"
 )
 
 // PVCRetentionPolicy controls what happens to the StatefulSet's
@@ -430,6 +443,9 @@ type TechnitiumClusterStatus struct {
 	// - "Available": the instance is reachable and serving
 	// - "Progressing": the controller is creating or updating the workload
 	// - "Degraded": a reconcile failed, with the cause in reason/message
+	// - "Upgrading": a cluster-aware rollout to a new spec.image is running
+	//   (RollingOut), halted (Stalled), refused (DowngradeBlocked), or done
+	//   (UpToDate)
 	//
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map
@@ -492,6 +508,21 @@ type TechnitiumClusterStatus struct {
 	// JSONPath into a stored value, not compute one from Nodes.
 	// +optional
 	Members string `json:"members,omitempty"`
+
+	// rollout tracks the node an in-flight upgrade is waiting on. It is nil
+	// when no rollout is running.
+	// +optional
+	Rollout *TechnitiumClusterRolloutStatus `json:"rollout,omitempty"`
+}
+
+// TechnitiumClusterRolloutStatus is the operator's bookmark of a running
+// upgrade, kept in status so the stall timer survives an operator restart.
+type TechnitiumClusterRolloutStatus struct {
+	// node is the pod currently being upgraded.
+	Node string `json:"node"`
+
+	// nodeStartedTime is when the operator released that node for upgrade.
+	NodeStartedTime metav1.Time `json:"nodeStartedTime"`
 }
 
 // +kubebuilder:object:root=true
@@ -500,6 +531,7 @@ type TechnitiumClusterStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.version`
+// +kubebuilder:printcolumn:name="Upgrading",type=string,JSONPath=`.status.conditions[?(@.type=='Upgrading')].status`,priority=1
 // +kubebuilder:printcolumn:name="Members",type=string,JSONPath=`.status.members`
 // +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=`.status.endpoint`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

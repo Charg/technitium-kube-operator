@@ -13,3 +13,7 @@ package testimage
 // It must match the kubebuilder default for spec.image in
 // api/v1alpha1/technitiumcluster_types.go.
 const TechnitiumImage = "technitium/dns-server:15.6.1"
+
+// PreviousTechnitiumImage is an older release than TechnitiumImage, used as
+// the starting point of upgrade tests.
+const PreviousTechnitiumImage = "technitium/dns-server:15.6.0"
