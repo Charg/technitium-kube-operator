@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.0](https://github.com/Charg/technitium-kube-operator/compare/v1.3.0...v1.4.0) (2026-10-16)
+
+
+### Features
+
+* **api:** show the record domain in kubectl get records ([#118](https://github.com/Charg/technitium-kube-operator/issues/118)) ([85984d5](https://github.com/Charg/technitium-kube-operator/commit/85984d5f0c01a09537852e84ead50600b6cf8145))
+* **cluster:** cluster-aware Technitium upgrade rollout ([#133](https://github.com/Charg/technitium-kube-operator/issues/133)) ([705ddc1](https://github.com/Charg/technitium-kube-operator/commit/705ddc170768e7dc402b502955dbed296c103b80))
+* **cluster:** readiness probe backed by the Technitium health check ([#131](https://github.com/Charg/technitium-kube-operator/issues/131)) ([c174bed](https://github.com/Charg/technitium-kube-operator/commit/c174bed92d90cca723bacce5139105694769b8c7))
+* **cluster:** report the running Technitium version per node ([#130](https://github.com/Charg/technitium-kube-operator/issues/130)) ([4daeb33](https://github.com/Charg/technitium-kube-operator/commit/4daeb33aed06e86cf4f6e6681b909849a9e5d31a))
+* default Technitium image to 15.6.1 ([#129](https://github.com/Charg/technitium-kube-operator/issues/129)) ([b0b9653](https://github.com/Charg/technitium-kube-operator/commit/b0b965395c536e73f6cf6be85d2e471d8ca3e5ef))
+
+
+### Bug Fixes
+
+* **cluster:** refresh a node's IP after its pod is rescheduled ([#132](https://github.com/Charg/technitium-kube-operator/issues/132)) ([3f1e480](https://github.com/Charg/technitium-kube-operator/commit/3f1e4800bd0b673e1e39d7d3d72a85b46c822bc7))
+
 ## [1.3.0](https://github.com/Charg/technitium-kube-operator/compare/v1.2.0...v1.3.0) (2026-10-15)
 
 
