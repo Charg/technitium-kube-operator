@@ -55,9 +55,10 @@ func TestCreateToken(t *testing.T) {
 			var gotUser, gotPass, gotTokenName string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
-				gotUser = formParams(r).Get("user")
-				gotPass = formParams(r).Get("pass")
-				gotTokenName = formParams(r).Get("tokenName")
+				form := formParams(r)
+				gotUser = form.Get("user")
+				gotPass = form.Get("pass")
+				gotTokenName = form.Get("tokenName")
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()

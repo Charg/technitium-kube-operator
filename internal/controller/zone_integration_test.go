@@ -51,7 +51,7 @@ func (f *fakeTechnitiumServer) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	zone := r.FormValue("zone")
+	zone := r.PostFormValue("zone")
 	writeJSON := func(body string) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, body)
@@ -74,7 +74,7 @@ func (f *fakeTechnitiumServer) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.createCount++
-		typ := r.FormValue("type")
+		typ := r.PostFormValue("type")
 		if typ == "" {
 			typ = string(dnsv1alpha1.ZoneTypePrimary)
 		}

@@ -29,7 +29,7 @@ func TestAddRecord(t *testing.T) {
 		opts      AddRecordOptions
 		body      string
 		wantErrIs error
-		wantQuery url.Values
+		wantForm  url.Values
 	}{
 		{
 			name: "A record",
@@ -38,7 +38,7 @@ func TestAddRecord(t *testing.T) {
 				RecordValue: RecordValue{IPAddress: "1.1.1.1"},
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone: {testZone}, "domain": {testDomain}, paramType: {"A"},
 				"ttl": {"300"}, "ipAddress": {"1.1.1.1"},
 			},
@@ -50,7 +50,7 @@ func TestAddRecord(t *testing.T) {
 				RecordValue: RecordValue{Text: "v=spf1 -all"},
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone: {testZone}, "domain": {testDomain}, paramType: {"TXT"}, "text": {"v=spf1 -all"},
 			},
 		},
@@ -61,7 +61,7 @@ func TestAddRecord(t *testing.T) {
 				RecordValue: RecordValue{Exchange: "mail.example.com", Preference: ptrInt32(10)},
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone: {testZone}, "domain": {testDomain}, paramType: {"MX"},
 				"exchange": {"mail.example.com"}, "preference": {"10"},
 			},
@@ -72,8 +72,8 @@ func TestAddRecord(t *testing.T) {
 				Zone: testZone, Domain: "alias.example.com", Type: "CNAME",
 				RecordValue: RecordValue{CName: "example.com"},
 			},
-			body:      statusOK,
-			wantQuery: url.Values{paramType: {"CNAME"}, "cname": {"example.com"}},
+			body:     statusOK,
+			wantForm: url.Values{paramType: {"CNAME"}, "cname": {"example.com"}},
 		},
 		{
 			name: "NS record",
@@ -81,8 +81,8 @@ func TestAddRecord(t *testing.T) {
 				Zone: testZone, Domain: testDomain, Type: "NS",
 				RecordValue: RecordValue{NameServer: "ns1.example.com"},
 			},
-			body:      statusOK,
-			wantQuery: url.Values{paramType: {"NS"}, "nameServer": {"ns1.example.com"}},
+			body:     statusOK,
+			wantForm: url.Values{paramType: {"NS"}, "nameServer": {"ns1.example.com"}},
 		},
 		{
 			name: "PTR record",
@@ -90,8 +90,8 @@ func TestAddRecord(t *testing.T) {
 				Zone: "1.168.192.in-addr.arpa", Domain: "10.1.168.192.in-addr.arpa", Type: "PTR",
 				RecordValue: RecordValue{PtrName: "host.example.com"},
 			},
-			body:      statusOK,
-			wantQuery: url.Values{paramType: {"PTR"}, "ptrName": {"host.example.com"}},
+			body:     statusOK,
+			wantForm: url.Values{paramType: {"PTR"}, "ptrName": {"host.example.com"}},
 		},
 		{
 			name:      "already exists is a sentinel",
@@ -110,7 +110,7 @@ func TestAddRecord(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -172,7 +172,7 @@ func TestGetRecords(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, url.Values{"domain": {testDomain}, "listZone": {"false"}})
+				assertForm(t, r, url.Values{"domain": {testDomain}, "listZone": {"false"}})
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -223,7 +223,7 @@ func TestUpdateRecord(t *testing.T) {
 		opts      UpdateRecordOptions
 		body      string
 		wantErrIs error
-		wantQuery url.Values
+		wantForm  url.Values
 	}{
 		{
 			name: "corrects ttl",
@@ -232,7 +232,7 @@ func TestUpdateRecord(t *testing.T) {
 				RecordValue: RecordValue{IPAddress: "1.1.1.1"},
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone: {testZone}, "domain": {testDomain}, paramType: {"A"},
 				"ttl": {"60"}, "ipAddress": {"1.1.1.1"},
 			},
@@ -250,7 +250,7 @@ func TestUpdateRecord(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -266,7 +266,7 @@ func TestDeleteRecord(t *testing.T) {
 		opts      DeleteRecordOptions
 		body      string
 		wantErrIs error
-		wantQuery url.Values
+		wantForm  url.Values
 	}{
 		{
 			name: nameSuccess,
@@ -274,7 +274,7 @@ func TestDeleteRecord(t *testing.T) {
 				Zone: testZone, Domain: testDomain, Type: "A", RecordValue: RecordValue{IPAddress: "1.1.1.1"},
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone: {testZone}, "domain": {testDomain}, paramType: {"A"}, "ipAddress": {"1.1.1.1"},
 			},
 		},
@@ -291,7 +291,7 @@ func TestDeleteRecord(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				_, _ = w.Write([]byte(tt.body))
 			})
 

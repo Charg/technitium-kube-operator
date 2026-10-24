@@ -18,10 +18,11 @@ func TestGetDashboardStats(t *testing.T) {
 		if r.URL.Path != "/api/dashboard/stats/get" {
 			t.Errorf("path = %q", r.URL.Path)
 		}
-		if got := formParams(r).Get(paramType); got != "LastHour" {
+		form := formParams(r)
+		if got := form.Get(paramType); got != "LastHour" {
 			t.Errorf("type = %q, want LastHour", got)
 		}
-		if formParams(r).Has("node") {
+		if form.Has("node") {
 			t.Errorf("node parameter must not be sent")
 		}
 		_, _ = w.Write([]byte(`{"response":{"stats":{"totalQueries":925,"totalNoError":834,` +

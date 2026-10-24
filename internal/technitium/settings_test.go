@@ -63,9 +63,9 @@ func TestGetDNSSettings(t *testing.T) {
 
 func TestSetDNSSettings(t *testing.T) {
 	tests := []struct {
-		name      string
-		opts      SetDNSSettingsOptions
-		wantQuery url.Values
+		name     string
+		opts     SetDNSSettingsOptions
+		wantForm url.Values
 		// absent lists parameter keys that must not appear in the request.
 		absent []string
 	}{
@@ -77,7 +77,7 @@ func TestSetDNSSettings(t *testing.T) {
 				Recursion:           ptr("UseSpecifiedNetworkACL"),
 				RecursionNetworkACL: &[]string{"192.168.0.0/16", "!10.0.0.0/8"},
 			},
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				"forwarders":          {"1.1.1.1,8.8.8.8"},
 				"forwarderProtocol":   {"Tls"},
 				"recursion":           {"UseSpecifiedNetworkACL"},
@@ -88,7 +88,7 @@ func TestSetDNSSettings(t *testing.T) {
 		{
 			name: "empty forwarder slice removes forwarders",
 			opts: SetDNSSettingsOptions{Forwarders: &[]string{}},
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				"forwarders": {"false"},
 			},
 		},
@@ -103,7 +103,7 @@ func TestSetDNSSettings(t *testing.T) {
 				UseLocalTime:          ptr(true),
 				MaxLogFileDays:        ptr(int32(30)),
 			},
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				"serveStale":            {"true"},
 				"serveStaleTtl":         {"86400"},
 				"cacheMaximumRecordTtl": {"604800"},
@@ -118,10 +118,10 @@ func TestSetDNSSettings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				for _, key := range tt.absent {
 					if formParams(r).Has(key) {
-						t.Errorf("query %q should be absent when its option is nil", key)
+						t.Errorf("form %q should be absent when its option is nil", key)
 					}
 				}
 				_, _ = w.Write([]byte(statusOK))
@@ -136,7 +136,7 @@ func TestSetDNSSettings(t *testing.T) {
 
 func TestSetDNSSettingsBlocking(t *testing.T) {
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		assertQuery(t, r, url.Values{
+		assertForm(t, r, url.Values{
 			"enableBlocking":               {"true"},
 			"blockingType":                 {"NxDomain"},
 			"blockListUrls":                {"https://a/hosts,https://b/hosts"},
