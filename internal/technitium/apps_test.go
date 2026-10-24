@@ -84,14 +84,14 @@ func TestDownloadAndInstallApp(t *testing.T) {
 		url       string
 		body      string
 		wantErrIs error
-		wantQuery url.Values
+		wantForm  url.Values
 	}{
 		{
-			name:      nameSuccess,
-			appName:   testAppName,
-			url:       "https://download.technitium.com/dns/apps/SplitHorizonApp-v1.4.zip",
-			body:      statusOK,
-			wantQuery: url.Values{"name": {testAppName}, "url": {"https://download.technitium.com/dns/apps/SplitHorizonApp-v1.4.zip"}},
+			name:     nameSuccess,
+			appName:  testAppName,
+			url:      "https://download.technitium.com/dns/apps/SplitHorizonApp-v1.4.zip",
+			body:     statusOK,
+			wantForm: url.Values{"name": {testAppName}, "url": {"https://download.technitium.com/dns/apps/SplitHorizonApp-v1.4.zip"}},
 		},
 		{
 			name:      "already installed is a sentinel, tolerated as idempotent by callers",
@@ -108,7 +108,7 @@ func TestDownloadAndInstallApp(t *testing.T) {
 				if r.URL.Path != "/api/apps/downloadAndInstall" {
 					t.Errorf("path = %q, want /api/apps/downloadAndInstall", r.URL.Path)
 				}
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -137,7 +137,7 @@ func TestDownloadAndUpdateApp(t *testing.T) {
 		if r.URL.Path != "/api/apps/downloadAndUpdate" {
 			t.Errorf("path = %q, want /api/apps/downloadAndUpdate", r.URL.Path)
 		}
-		assertQuery(t, r, url.Values{"name": {testAppName}, "url": {"https://example.com/app-v2.zip"}})
+		assertForm(t, r, url.Values{"name": {testAppName}, "url": {"https://example.com/app-v2.zip"}})
 		_, _ = w.Write([]byte(statusOK))
 	})
 
@@ -166,7 +166,7 @@ func TestUninstallApp(t *testing.T) {
 				if r.URL.Path != "/api/apps/uninstall" {
 					t.Errorf("path = %q, want /api/apps/uninstall", r.URL.Path)
 				}
-				assertQuery(t, r, url.Values{"name": {testAppName}})
+				assertForm(t, r, url.Values{"name": {testAppName}})
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -191,7 +191,7 @@ func TestGetAppConfig(t *testing.T) {
 		if r.URL.Path != "/api/apps/config/get" {
 			t.Errorf("path = %q, want /api/apps/config/get", r.URL.Path)
 		}
-		assertQuery(t, r, url.Values{"name": {testAppName}})
+		assertForm(t, r, url.Values{"name": {testAppName}})
 		_, _ = w.Write([]byte(`{"status":"ok","response":{"config":"{\"key\":\"value\"}"}}`))
 	})
 
@@ -234,7 +234,7 @@ func TestSetAppConfig(t *testing.T) {
 				if r.URL.Path != "/api/apps/config/set" {
 					t.Errorf("path = %q, want /api/apps/config/set", r.URL.Path)
 				}
-				assertQuery(t, r, url.Values{"name": {testAppName}, "config": {"bad json"}})
+				assertForm(t, r, url.Values{"name": {testAppName}, "config": {"bad json"}})
 				_, _ = w.Write([]byte(tt.body))
 			})
 

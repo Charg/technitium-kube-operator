@@ -142,21 +142,19 @@ func (c *Client) Login(ctx context.Context) (string, error) {
 	return out.Token, nil
 }
 
-// doRaw issues a GET against path with params, validates the response envelope
-// status, and returns the raw body. The stored token is appended to every
-// request.
+// doRaw POSTs params as a form to path, validates the response envelope status,
+// and returns the raw body. The stored token is sent as a bearer token in the
+// Authorization header, which Technitium requires from 15.0.
 func (c *Client) doRaw(ctx context.Context, path string, params url.Values) ([]byte, error) {
-	if params == nil {
-		params = url.Values{}
-	}
-	if c.token != "" {
-		params.Set("token", c.token)
-	}
-
-	reqURL := c.baseURL + path + "?" + params.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	// Parameters go in a POST form body rather than the query string: they can
+	// carry passwords and tokens, and Go's transport errors quote the full URL.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, strings.NewReader(params.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("technitium: building request for %s failed: %w", path, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 
 	resp, err := c.httpClient.Do(req)

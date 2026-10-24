@@ -59,7 +59,7 @@ func (f *fakeTechnitiumRecordServer) handle(w http.ResponseWriter, r *http.Reque
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	domain := r.URL.Query().Get("domain")
+	domain := r.PostFormValue("domain")
 	writeJSON := func(body string) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, body)
@@ -82,7 +82,7 @@ func (f *fakeTechnitiumRecordServer) handle(w http.ResponseWriter, r *http.Reque
 		}
 		f.addCount++
 		ttl := int32(3600)
-		f.records[domain] = fakeRecordEntry{ttl: ttl, ipAddress: r.URL.Query().Get("ipAddress")}
+		f.records[domain] = fakeRecordEntry{ttl: ttl, ipAddress: r.PostFormValue("ipAddress")}
 		writeJSON(`{"status":"ok"}`)
 	case "/api/zones/records/delete":
 		if _, ok := f.records[domain]; !ok {

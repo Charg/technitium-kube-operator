@@ -51,8 +51,8 @@ func TestClientOptionsFromSecret(t *testing.T) {
 	t.Run("username and password", func(t *testing.T) {
 		var gotUser, gotPass string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotUser = r.URL.Query().Get("user")
-			gotPass = r.URL.Query().Get("pass")
+			gotUser = r.PostFormValue("user")
+			gotPass = r.PostFormValue("pass")
 			_, _ = w.Write([]byte(`{"status":"ok","token":"issued"}`))
 		}))
 		defer srv.Close()

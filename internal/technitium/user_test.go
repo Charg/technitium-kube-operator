@@ -55,9 +55,10 @@ func TestCreateToken(t *testing.T) {
 			var gotUser, gotPass, gotTokenName string
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
-				gotUser = r.URL.Query().Get("user")
-				gotPass = r.URL.Query().Get("pass")
-				gotTokenName = r.URL.Query().Get("tokenName")
+				form := formParams(r)
+				gotUser = form.Get("user")
+				gotPass = form.Get("pass")
+				gotTokenName = form.Get("tokenName")
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer srv.Close()
@@ -111,8 +112,8 @@ func TestChangePassword(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var gotToken, gotPass string
 			c := newTestClient(t, "sess-tok", func(w http.ResponseWriter, r *http.Request) {
-				gotToken = r.URL.Query().Get("token")
-				gotPass = r.URL.Query().Get("pass")
+				gotToken = r.Header.Get("Authorization")
+				gotPass = formParams(r).Get("pass")
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -120,8 +121,8 @@ func TestChangePassword(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("ChangePassword err = %v, wantErr %v", err, tt.wantErr)
 			}
-			if gotToken != "sess-tok" {
-				t.Errorf("token param = %q, want sess-tok", gotToken)
+			if gotToken != "Bearer sess-tok" {
+				t.Errorf("Authorization = %q, want Bearer sess-tok", gotToken)
 			}
 			if gotPass != "new-password" {
 				t.Errorf("pass param = %q, want new-password", gotPass)

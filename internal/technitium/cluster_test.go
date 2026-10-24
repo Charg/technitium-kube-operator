@@ -122,7 +122,7 @@ func TestInitCluster(t *testing.T) {
 		`"ipAddresses":["10.0.0.1"],"type":"Primary","state":"Self"}]},"status":"ok"}`
 
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(body))
 	})
 
@@ -173,7 +173,7 @@ func TestInitJoinCluster(t *testing.T) {
 		`"ipAddresses":["10.0.0.2"],"type":"Secondary","state":"Self"}]},"status":"ok"}`
 
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(body))
 	})
 
@@ -228,7 +228,7 @@ func TestInitJoinClusterAlreadyInitialized(t *testing.T) {
 func TestRemoveSecondary(t *testing.T) {
 	var gotParams url.Values
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
@@ -243,7 +243,7 @@ func TestRemoveSecondary(t *testing.T) {
 func TestDeleteSecondary(t *testing.T) {
 	var gotParams url.Values
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
@@ -268,7 +268,7 @@ func TestDeleteSecondaryNotFound(t *testing.T) {
 func TestDeletePrimaryCluster(t *testing.T) {
 	var gotParams url.Values
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
@@ -285,7 +285,7 @@ func TestUpdateNodeIPAddresses(t *testing.T) {
 	var gotParams url.Values
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(`{"response":{"clusterInitialized":true,"clusterNodes":[` +
 			`{"id":2,"name":"dns-1.c","ipAddresses":["10.0.0.9"],"type":"Secondary","state":"Self"}]},"status":"ok"}`))
 	})
@@ -308,7 +308,7 @@ func TestUpdateNodeIPAddresses(t *testing.T) {
 func TestLeaveCluster(t *testing.T) {
 	var gotParams url.Values
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		gotParams = r.URL.Query()
+		gotParams = formParams(r)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 

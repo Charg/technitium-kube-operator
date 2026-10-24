@@ -24,13 +24,13 @@ func TestCreateZone(t *testing.T) {
 		status    int
 		body      string
 		wantErrIs error
-		wantQuery url.Values
+		wantForm  url.Values
 	}{
 		{
-			name:      nameSuccess,
-			opts:      CreateZoneOptions{Zone: testZone, Type: typePrimary},
-			body:      `{"response":{"domain":"example.com"},"status":"ok"}`,
-			wantQuery: url.Values{paramZone: {testZone}, paramType: {typePrimary}},
+			name:     nameSuccess,
+			opts:     CreateZoneOptions{Zone: testZone, Type: typePrimary},
+			body:     `{"response":{"domain":"example.com"},"status":"ok"}`,
+			wantForm: url.Values{paramZone: {testZone}, paramType: {typePrimary}},
 		},
 		{
 			name:      "already exists is a sentinel",
@@ -47,7 +47,7 @@ func TestCreateZone(t *testing.T) {
 				Protocol:  "Https",
 			},
 			body: `{"response":{"domain":"fwd.example.com"},"status":"ok"}`,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone:   {"fwd.example.com"},
 				paramType:   {"Forwarder"},
 				"forwarder": {"1.1.1.1"},
@@ -62,7 +62,7 @@ func TestCreateZone(t *testing.T) {
 				PrimaryNameServerAddresses: []string{"10.0.0.1", "10.0.0.2"},
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone:                    {"sec.example.com"},
 				paramType:                    {"Secondary"},
 				"primaryNameServerAddresses": {"10.0.0.1,10.0.0.2"},
@@ -89,7 +89,7 @@ func TestCreateZone(t *testing.T) {
 				ProxyPassword:    "pass",
 			},
 			body: statusOK,
-			wantQuery: url.Values{
+			wantForm: url.Values{
 				paramZone:          {"fwd.example.com"},
 				paramType:          {"Forwarder"},
 				"forwarder":        {"1.1.1.1"},
@@ -107,7 +107,7 @@ func TestCreateZone(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				if tt.status != 0 {
 					w.WriteHeader(tt.status)
 				}
@@ -150,7 +150,7 @@ func TestDeleteZone(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, url.Values{paramZone: {testZone}})
+				assertForm(t, r, url.Values{paramZone: {testZone}})
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -191,7 +191,7 @@ func TestGetZoneOptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, url.Values{paramZone: {testZone}})
+				assertForm(t, r, url.Values{paramZone: {testZone}})
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -225,45 +225,45 @@ func TestSetZoneOptions(t *testing.T) {
 		opts      ZoneOptionsUpdate
 		body      string
 		wantErrIs error
-		wantQuery url.Values
+		wantForm  url.Values
 	}{
 		{
-			name:      "sets catalog and disabled",
-			opts:      ZoneOptionsUpdate{Catalog: &catalog, Disabled: &disabled},
-			body:      statusOK,
-			wantQuery: url.Values{paramZone: {testZone}, "catalog": {"cat2"}, "disabled": {"true"}},
+			name:     "sets catalog and disabled",
+			opts:     ZoneOptionsUpdate{Catalog: &catalog, Disabled: &disabled},
+			body:     statusOK,
+			wantForm: url.Values{paramZone: {testZone}, "catalog": {"cat2"}, "disabled": {"true"}},
 		},
 		{
-			name:      "empty catalog clears membership",
-			opts:      ZoneOptionsUpdate{Catalog: ptr("")},
-			body:      statusOK,
-			wantQuery: url.Values{paramZone: {testZone}, "catalog": {""}},
+			name:     "empty catalog clears membership",
+			opts:     ZoneOptionsUpdate{Catalog: ptr("")},
+			body:     statusOK,
+			wantForm: url.Values{paramZone: {testZone}, "catalog": {""}},
 		},
 		{
-			name:      "no fields sends only zone",
-			opts:      ZoneOptionsUpdate{},
-			body:      statusOK,
-			wantQuery: url.Values{paramZone: {testZone}},
+			name:     "no fields sends only zone",
+			opts:     ZoneOptionsUpdate{},
+			body:     statusOK,
+			wantForm: url.Values{paramZone: {testZone}},
 		},
 		{
-			name:      "sets dnssec validation",
-			opts:      ZoneOptionsUpdate{DNSSECValidation: ptr(true)},
-			body:      statusOK,
-			wantQuery: url.Values{paramZone: {testZone}, "dnssecValidation": {"true"}},
+			name:     "sets dnssec validation",
+			opts:     ZoneOptionsUpdate{DNSSECValidation: ptr(true)},
+			body:     statusOK,
+			wantForm: url.Values{paramZone: {testZone}, "dnssecValidation": {"true"}},
 		},
 		{
 			name:      "missing zone",
 			opts:      ZoneOptionsUpdate{},
 			body:      zoneNotFoundBody,
 			wantErrIs: ErrZoneNotFound,
-			wantQuery: url.Values{paramZone: {testZone}},
+			wantForm:  url.Values{paramZone: {testZone}},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-				assertQuery(t, r, tt.wantQuery)
+				assertForm(t, r, tt.wantForm)
 				_, _ = w.Write([]byte(tt.body))
 			})
 
@@ -294,7 +294,7 @@ func TestListZones(t *testing.T) {
 
 	t.Run("follows pagination", func(t *testing.T) {
 		c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Query().Get("pageNumber") {
+			switch formParams(r).Get("pageNumber") {
 			case "1":
 				_, _ = fmt.Fprint(w, `{"response":{"pageNumber":1,"totalPages":2,"totalZones":3,`+
 					`"zones":[{"name":"a.com"},{"name":"b.com"}]},"status":"ok"}`)
@@ -302,7 +302,7 @@ func TestListZones(t *testing.T) {
 				_, _ = fmt.Fprint(w, `{"response":{"pageNumber":2,"totalPages":2,"totalZones":3,`+
 					`"zones":[{"name":"c.com"}]},"status":"ok"}`)
 			default:
-				t.Errorf("unexpected pageNumber %q", r.URL.Query().Get("pageNumber"))
+				t.Errorf("unexpected pageNumber %q", formParams(r).Get("pageNumber"))
 			}
 		})
 
@@ -328,17 +328,17 @@ func TestListZones(t *testing.T) {
 
 func ptr[T any](v T) *T { return &v }
 
-// assertQuery checks that every wanted parameter is present with the expected
-// value. The token parameter is appended by the client and ignored here.
-func assertQuery(t *testing.T, r *http.Request, want url.Values) {
+// assertForm checks that every wanted parameter is present with the expected
+// value in the request form.
+func assertForm(t *testing.T, r *http.Request, want url.Values) {
 	t.Helper()
 	if want == nil {
 		return
 	}
-	got := r.URL.Query()
+	got := formParams(r)
 	for key, values := range want {
 		if got.Get(key) != values[0] {
-			t.Errorf("query %q = %q, want %q", key, got.Get(key), values[0])
+			t.Errorf("form %q = %q, want %q", key, got.Get(key), values[0])
 		}
 	}
 }

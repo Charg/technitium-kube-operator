@@ -12,6 +12,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -112,7 +114,7 @@ func TestLogin(t *testing.T) {
 			called := false
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
-				if got := r.URL.Query().Get("user"); got != tt.username {
+				if got := formParams(r).Get("user"); got != tt.username {
 					t.Errorf("user param = %q, want %q", got, tt.username)
 				}
 				_, _ = w.Write([]byte(tt.body))
@@ -141,18 +143,39 @@ func TestLogin(t *testing.T) {
 	}
 }
 
-func TestDoRawSendsToken(t *testing.T) {
-	var gotToken string
+func TestDoRawSendsTokenAsBearerHeader(t *testing.T) {
+	var gotMethod, gotContentType, gotAuth, gotZone string
+	var tokenInQuery, tokenInForm bool
 	c := newTestClient(t, "tok-42", func(w http.ResponseWriter, r *http.Request) {
-		gotToken = r.URL.Query().Get("token")
+		gotMethod = r.Method
+		gotContentType = r.Header.Get("Content-Type")
+		gotAuth = r.Header.Get("Authorization")
+		tokenInQuery = r.URL.Query().Has("token")
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("ParseForm: %v", err)
+		}
+		tokenInForm = r.PostForm.Has("token")
+		gotZone = r.PostForm.Get(paramZone)
 		_, _ = w.Write([]byte(statusOK))
 	})
 
 	if err := c.DeleteZone(context.Background(), testZone); err != nil {
 		t.Fatalf("DeleteZone: %v", err)
 	}
-	if gotToken != "tok-42" {
-		t.Errorf("token param = %q, want tok-42", gotToken)
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotContentType != "application/x-www-form-urlencoded" {
+		t.Errorf("Content-Type = %q, want application/x-www-form-urlencoded", gotContentType)
+	}
+	if gotAuth != "Bearer tok-42" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok-42")
+	}
+	if tokenInQuery || tokenInForm {
+		t.Errorf("token sent as a parameter (query %v, form %v), want only the Authorization header", tokenInQuery, tokenInForm)
+	}
+	if gotZone != testZone {
+		t.Errorf("zone form param = %q, want %q", gotZone, testZone)
 	}
 }
 
@@ -221,4 +244,56 @@ func TestNetworkFailure(t *testing.T) {
 	} else if errors.Is(err, ErrZoneNotFound) || errors.Is(err, ErrZoneAlreadyExists) {
 		t.Fatalf("network failure misclassified as sentinel: %v", err)
 	}
+}
+
+// TestTransportErrorsOmitCredentials pins that a failed request never echoes
+// the password or token, since callers log these errors and copy them into
+// status conditions.
+func TestTransportErrorsOmitCredentials(t *testing.T) {
+	const (
+		password = "hunter2-password"
+		token    = "tok-secret-42"
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	baseURL := srv.URL
+	srv.Close()
+
+	login, err := NewClient(baseURL, WithCredentials(testUser, password))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	authed, err := NewClient(baseURL, WithToken(token))
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	calls := map[string]func() error{
+		"Login": func() error { _, err := login.Login(context.Background()); return err },
+		"CreateToken": func() error {
+			_, err := login.CreateToken(context.Background(), "technitium-operator")
+			return err
+		},
+		"ChangePassword": func() error { return authed.ChangePassword(context.Background(), password) },
+		"DeleteZone":     func() error { return authed.DeleteZone(context.Background(), testZone) },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			if err == nil {
+				t.Fatal("expected a connection error, got nil")
+			}
+			for _, secret := range []string{password, token} {
+				if strings.Contains(err.Error(), secret) {
+					t.Errorf("error leaks a credential: %v", err)
+				}
+			}
+		})
+	}
+}
+
+// formParams returns the request's form parameters, which the client sends as
+// a POST body.
+func formParams(r *http.Request) url.Values {
+	_ = r.ParseForm()
+	return r.PostForm
 }
