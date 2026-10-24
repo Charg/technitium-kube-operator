@@ -120,7 +120,7 @@ func TestSetDNSSettings(t *testing.T) {
 			c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
 				assertQuery(t, r, tt.wantQuery)
 				for _, key := range tt.absent {
-					if r.URL.Query().Has(key) {
+					if formParams(r).Has(key) {
 						t.Errorf("query %q should be absent when its option is nil", key)
 					}
 				}

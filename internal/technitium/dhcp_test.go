@@ -50,7 +50,7 @@ func TestGetDHCPScope(t *testing.T) {
 		if r.URL.Path != "/api/dhcp/scopes/get" {
 			t.Errorf("path = %q, want /api/dhcp/scopes/get", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("name"); got != testScopeName {
+		if got := formParams(r).Get("name"); got != testScopeName {
 			t.Errorf("name param = %q, want %q", got, testScopeName)
 		}
 		_, _ = w.Write([]byte(`{"status":"ok","response":{
@@ -97,7 +97,7 @@ func TestSetDHCPScope(t *testing.T) {
 		if r.URL.Path != "/api/dhcp/scopes/set" {
 			t.Errorf("path = %q, want /api/dhcp/scopes/set", r.URL.Path)
 		}
-		q := r.URL.Query()
+		q := formParams(r)
 		if got := q.Get("name"); got != testScopeName {
 			t.Errorf("name = %q, want %q", got, testScopeName)
 		}
@@ -169,7 +169,7 @@ func TestEnableDisableDeleteDHCPScope(t *testing.T) {
 				if r.URL.Path != tt.wantPath {
 					t.Errorf("path = %q, want %q", r.URL.Path, tt.wantPath)
 				}
-				if got := r.URL.Query().Get("name"); got != testScopeName {
+				if got := formParams(r).Get("name"); got != testScopeName {
 					t.Errorf("name param = %q, want %q", got, testScopeName)
 				}
 				_, _ = w.Write([]byte(statusOK))
@@ -219,7 +219,7 @@ func TestAddReservedLease(t *testing.T) {
 		if r.URL.Path != "/api/dhcp/scopes/addReservedLease" {
 			t.Errorf("path = %q, want /api/dhcp/scopes/addReservedLease", r.URL.Path)
 		}
-		q := r.URL.Query()
+		q := formParams(r)
 		if got := q.Get("name"); got != testScopeName {
 			t.Errorf("name = %q, want %q", got, testScopeName)
 		}
@@ -269,7 +269,7 @@ func TestRemoveReservedLease(t *testing.T) {
 		if r.URL.Path != "/api/dhcp/scopes/removeReservedLease" {
 			t.Errorf("path = %q, want /api/dhcp/scopes/removeReservedLease", r.URL.Path)
 		}
-		q := r.URL.Query()
+		q := formParams(r)
 		if got := q.Get("name"); got != testScopeName {
 			t.Errorf("name = %q, want %q", got, testScopeName)
 		}

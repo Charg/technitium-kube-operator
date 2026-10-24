@@ -4,6 +4,8 @@ A Kubernetes operator that manages Technitium DNS Server zones as custom resourc
 ## Description
 The operator provisions Technitium DNS Server instances (`TechnitiumCluster`, API group `dns.packet.fail/v1alpha1`) and reconciles `Zone` resources against them, keeping DNS zones declared in the cluster in sync with the server. Manage DNS state with kubectl and GitOps instead of the Technitium admin console.
 
+The operator requires Technitium DNS Server 15.0 or later, both for the instances it provisions and for any server it is pointed at. It sends API parameters as a POST form and its API token in the `Authorization: Bearer` header, which Technitium only accepts from 15.0.
+
 ## TechnitiumCluster resource
 A `TechnitiumCluster` provisions a Technitium DNS Server instance: a StatefulSet, a client Service, and (unless `spec.adminSecretRef` is set) a generated `<name>-admin` Secret holding its credentials. It is cluster-scoped. Once the instance is reachable, its status reports `endpoint`, the client Service that load-balances across every replica, and `primaryEndpoint`, the Primary node (`<name>-0`) addressed through the headless Service. Every resource that writes to the instance (Zone, Record, Blocklist and the rest) sends its API calls to `primaryEndpoint`, so a write never lands on a Secondary. A supplied `spec.adminSecretRef` must name a Secret in the operator's namespace (the pods mount it from there) containing `username` and `password` keys; the operator writes a `token` key back into it. Its `namespace` field must be empty or the operator's namespace, otherwise the cluster is marked Degraded with reason `InvalidAdminSecretRef`.
 

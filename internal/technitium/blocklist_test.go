@@ -47,7 +47,7 @@ func TestAllowedAndBlockedZones(t *testing.T) {
 				if r.URL.Path != tt.wantPath {
 					t.Errorf("path = %q, want %q", r.URL.Path, tt.wantPath)
 				}
-				if r.URL.Query().Get("domain") == "" {
+				if formParams(r).Get("domain") == "" {
 					t.Error("domain parameter missing")
 				}
 				_, _ = w.Write([]byte(statusOK))

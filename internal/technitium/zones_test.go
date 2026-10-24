@@ -294,7 +294,7 @@ func TestListZones(t *testing.T) {
 
 	t.Run("follows pagination", func(t *testing.T) {
 		c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-			switch r.URL.Query().Get("pageNumber") {
+			switch formParams(r).Get("pageNumber") {
 			case "1":
 				_, _ = fmt.Fprint(w, `{"response":{"pageNumber":1,"totalPages":2,"totalZones":3,`+
 					`"zones":[{"name":"a.com"},{"name":"b.com"}]},"status":"ok"}`)
@@ -302,7 +302,7 @@ func TestListZones(t *testing.T) {
 				_, _ = fmt.Fprint(w, `{"response":{"pageNumber":2,"totalPages":2,"totalZones":3,`+
 					`"zones":[{"name":"c.com"}]},"status":"ok"}`)
 			default:
-				t.Errorf("unexpected pageNumber %q", r.URL.Query().Get("pageNumber"))
+				t.Errorf("unexpected pageNumber %q", formParams(r).Get("pageNumber"))
 			}
 		})
 
@@ -329,13 +329,13 @@ func TestListZones(t *testing.T) {
 func ptr[T any](v T) *T { return &v }
 
 // assertQuery checks that every wanted parameter is present with the expected
-// value. The token parameter is appended by the client and ignored here.
+// value in the request form.
 func assertQuery(t *testing.T, r *http.Request, want url.Values) {
 	t.Helper()
 	if want == nil {
 		return
 	}
-	got := r.URL.Query()
+	got := formParams(r)
 	for key, values := range want {
 		if got.Get(key) != values[0] {
 			t.Errorf("query %q = %q, want %q", key, got.Get(key), values[0])

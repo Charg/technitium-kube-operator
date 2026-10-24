@@ -27,7 +27,7 @@ func TestSignZone(t *testing.T) {
 		if r.URL.Path != "/api/zones/dnssec/sign" {
 			t.Errorf("path = %q, want /api/zones/dnssec/sign", r.URL.Path)
 		}
-		q := r.URL.Query()
+		q := formParams(r)
 		if got := q.Get("zone"); got != "example.com" {
 			t.Errorf("zone = %q, want example.com", got)
 		}
@@ -82,7 +82,7 @@ func TestSignZoneECDSA(t *testing.T) {
 	curve := "P256"
 
 	c := newTestClient(t, "t", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
+		q := formParams(r)
 		if got := q.Get("algorithm"); got != "ECDSA" {
 			t.Errorf("algorithm = %q, want ECDSA", got)
 		}
@@ -123,7 +123,7 @@ func TestUnsignZone(t *testing.T) {
 		if r.URL.Path != "/api/zones/dnssec/unsign" {
 			t.Errorf("path = %q, want /api/zones/dnssec/unsign", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("zone"); got != "example.com" {
+		if got := formParams(r).Get("zone"); got != "example.com" {
 			t.Errorf("zone = %q, want example.com", got)
 		}
 		_, _ = w.Write([]byte(statusOK))
@@ -149,7 +149,7 @@ func TestGetDNSSECProperties(t *testing.T) {
 		if r.URL.Path != "/api/zones/dnssec/properties/get" {
 			t.Errorf("path = %q, want /api/zones/dnssec/properties/get", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("zone"); got != "example.com" {
+		if got := formParams(r).Get("zone"); got != "example.com" {
 			t.Errorf("zone = %q, want example.com", got)
 		}
 
