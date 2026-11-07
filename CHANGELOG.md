@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/Charg/technitium-kube-operator/compare/v1.4.0...v1.4.1) (2026-10-24)
+
+
+### Bug Fixes
+
+* **technitium:** keep credentials out of API request URLs ([#138](https://github.com/Charg/technitium-kube-operator/issues/138)) ([5a9fb68](https://github.com/Charg/technitium-kube-operator/commit/5a9fb68f965145d2c654944b0e0dfe2b7fd38683))
+
 ## [1.4.0](https://github.com/Charg/technitium-kube-operator/compare/v1.3.0...v1.4.0) (2026-10-16)
 
 
