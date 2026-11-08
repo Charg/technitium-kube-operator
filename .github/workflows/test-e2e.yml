@@ -18,6 +18,8 @@ jobs:
       contents: read
     name: E2E tests
     runs-on: ubuntu-latest
+    # Backstop above go test's own 45m -timeout, so a hang outside the test binary fails fast.
+    timeout-minutes: 60
     steps:
       - name: Clone the code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

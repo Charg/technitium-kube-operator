@@ -106,10 +106,16 @@ setup-test-e2e:
 # about 11m in total; the upgrade spec adds roughly 5-8m), hence 45m headroom.
 # Go's default 10m kills the binary mid-join, which surfaces as a bare
 # "test timed out after 10m0s" panic rather than a Ginkgo failure.
+# The cluster is deleted whether the suite passes or fails, so every run starts
+# fresh; the suite itself does no teardown.
 [group('Development')]
 test-e2e: setup-test-e2e manifests generate fmt vet
+    #!/usr/bin/env bash
+    set -uo pipefail
     KIND="{{ kind }}" KIND_CLUSTER="{{ kind_cluster }}" go test -tags=e2e ./test/e2e/ -v -ginkgo.v -timeout 45m
-    @just cleanup-test-e2e
+    status=$?
+    just cleanup-test-e2e
+    exit "$status"
 
 # Tear down the Kind cluster used for e2e tests
 [group('Development')]
