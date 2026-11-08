@@ -1,0 +1,72 @@
+name: Flake Lock Diff
+
+on:
+  pull_request:
+    paths:
+      - flake.lock
+      - flake.nix
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  diff:
+    permissions:
+      contents: read
+      pull-requests: write
+    name: Diff dev shell closure
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+
+      # Build the dev shell from the PR base and head, then diff the two closures.
+      # The base is checked out as a worktree so a flake.nix change on either side is reflected.
+      - name: Diff closures
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach ../base "$BASE_SHA"
+          shell=devShells.x86_64-linux.default
+          old=$(nix build --no-link --print-out-paths "../base#${shell}")
+          new=$(nix build --no-link --print-out-paths ".#${shell}")
+          # diff-closures colours its output even when not writing to a terminal.
+          nix store diff-closures "$old" "$new" | sed 's/\x1b\[[0-9;]*m//g' > closure.diff
+
+          {
+            echo '<!-- flake-lock-diff -->'
+            echo '### Dev shell changes'
+            echo
+            if [ -s closure.diff ]; then
+              echo '```'
+              cat closure.diff
+              echo '```'
+            else
+              echo 'No package changes in the dev shell closure.'
+            fi
+          } > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      # Fork PRs get a read-only token, so they only get the job summary above.
+      - name: Comment on PR
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- flake-lock-diff -->")) | .id' | head -1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F body=@comment.md
+          else
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file comment.md
+          fi
