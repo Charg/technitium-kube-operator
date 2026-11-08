@@ -163,10 +163,14 @@ var _ = Describe("TechnitiumCluster Controller upgrade rollout", func() {
 	ctx := context.Background()
 
 	const (
-		oldImage   = testimage.PreviousTechnitiumImage
-		newImage   = testimage.TechnitiumImage
-		oldVersion = "15.6.0"
-		newVersion = "15.6.1"
+		oldImage = testimage.PreviousTechnitiumImage
+		newImage = testimage.TechnitiumImage
+	)
+
+	// Derived from the image tags so a Renovate bump of the images needs no edit here.
+	var (
+		oldVersion = testimage.Version(oldImage)
+		newVersion = testimage.Version(newImage)
 	)
 
 	var (

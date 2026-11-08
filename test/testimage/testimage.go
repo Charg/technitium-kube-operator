@@ -9,6 +9,8 @@ the full license text.
 // suites, so a version bump touches one test location.
 package testimage
 
+import "strings"
+
 // TechnitiumImage is the default Technitium DNS Server image used by tests.
 // It must match the kubebuilder default for spec.image in
 // api/v1alpha1/technitiumcluster_types.go.
@@ -17,3 +19,9 @@ const TechnitiumImage = "technitium/dns-server:15.6.1"
 // PreviousTechnitiumImage is an older release than TechnitiumImage, used as
 // the starting point of upgrade tests.
 const PreviousTechnitiumImage = "technitium/dns-server:15.6.0"
+
+// Version returns the version tag of a Technitium image reference, e.g.
+// "15.6.1" for "technitium/dns-server:15.6.1".
+func Version(image string) string {
+	return image[strings.LastIndex(image, ":")+1:]
+}

@@ -486,7 +486,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 			By("watching the nodes restart and the rollout converge")
 			flippedAt := map[int]time.Time{}
-			wantStatus := strings.TrimPrefix(testimage.TechnitiumImage, "technitium/dns-server:") + "|False|UpToDate|Ready|3/3"
+			wantStatus := testimage.Version(testimage.TechnitiumImage) + "|False|UpToDate|Ready|3/3"
 			Eventually(func(g Gomega) {
 				for i := range replicas {
 					if _, seen := flippedAt[i]; seen {
