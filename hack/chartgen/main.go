@@ -10,7 +10,8 @@ the full license text.
 // cannot drift from the API.
 //
 // Bodies (CRD spec, RBAC rules, webhook lists) are copied verbatim from config/;
-// only the metadata is rewritten to use Helm values and helpers.
+// only the metadata is rewritten to use Helm values and helpers. It also strips
+// controller-gen's version annotation from the CRDs under config/ in place.
 //
 // With -check-rendered it instead reads `helm template` output on stdin and
 // verifies the rendered chart matches config/.
@@ -128,6 +129,38 @@ func writeFile(path string, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
+// generatorVersionAnnotation is stamped on every CRD by controller-gen. It is
+// stripped so a controller-tools bump only changes the CRDs when their content does.
+const generatorVersionAnnotation = "controller-gen.kubebuilder.io/version"
+
+// stripGeneratorVersion removes generatorVersionAnnotation from the CRD at path
+// in place, dropping the metadata.annotations key if nothing else is left in it.
+func stripGeneratorVersion(path string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var kept []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if strings.HasPrefix(line, "    "+generatorVersionAnnotation+":") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	var out []string
+	for i, line := range kept {
+		if line == "  annotations:" && (i+1 == len(kept) || !strings.HasPrefix(kept[i+1], "    ")) {
+			continue
+		}
+		out = append(out, line)
+	}
+	stripped := strings.Join(out, "\n")
+	if stripped == string(b) {
+		return nil
+	}
+	return writeFile(path, stripped)
+}
+
 func generateCRDs(p paths) error {
 	srcs, err := filepath.Glob(filepath.Join(p.config, "crd", "bases", "*.yaml"))
 	if err != nil {
@@ -144,6 +177,9 @@ func generateCRDs(p paths) error {
 	}
 
 	for _, src := range srcs {
+		if err := stripGeneratorVersion(src); err != nil {
+			return err
+		}
 		b, err := readSource(src)
 		if err != nil {
 			return err
@@ -167,13 +203,21 @@ func generateCRDs(p paths) error {
 		out.WriteString("kind: CustomResourceDefinition\n")
 		out.WriteString("metadata:\n")
 		fmt.Fprintf(&out, "  name: %s\n", crd.Metadata.Name)
-		out.WriteString("  annotations:\n")
-		for _, k := range slices.Sorted(maps.Keys(crd.Metadata.Annotations)) {
-			fmt.Fprintf(&out, "    %s: %s\n", k, crd.Metadata.Annotations[k])
+		if len(crd.Metadata.Annotations) == 0 {
+			// Avoid rendering an empty `annotations:` when crds.keep is off.
+			out.WriteString("  {{- if .Values.crds.keep }}\n")
+			out.WriteString("  annotations:\n")
+			out.WriteString("    helm.sh/resource-policy: keep\n")
+			out.WriteString("  {{- end }}\n")
+		} else {
+			out.WriteString("  annotations:\n")
+			for _, k := range slices.Sorted(maps.Keys(crd.Metadata.Annotations)) {
+				fmt.Fprintf(&out, "    %s: %s\n", k, crd.Metadata.Annotations[k])
+			}
+			out.WriteString("    {{- if .Values.crds.keep }}\n")
+			out.WriteString("    helm.sh/resource-policy: keep\n")
+			out.WriteString("    {{- end }}\n")
 		}
-		out.WriteString("    {{- if .Values.crds.keep }}\n")
-		out.WriteString("    helm.sh/resource-policy: keep\n")
-		out.WriteString("    {{- end }}\n")
 		out.WriteString("  labels:\n")
 		out.WriteString("    {{- include \"technitium-operator.labels\" . | nindent 4 }}\n")
 		out.WriteString(spec)

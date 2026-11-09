@@ -44,6 +44,7 @@ manifests: controller-gen
     @just helm-sync
 
 # Regenerate the Helm chart's CRD, RBAC and webhook templates from config/
+# (also strips controller-gen's version annotation from config/'s CRDs)
 [group('Development')]
 helm-sync:
     go run ./hack/chartgen
