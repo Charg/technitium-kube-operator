@@ -1053,7 +1053,7 @@ spec:
                   supplies clusterDomain's default.
                 type: string
               image:
-                default: technitium/dns-server:15.6.1
+                default: technitium/dns-server:15.6.2
                 description: image is the container image for the Technitium DNS Server.
                 type: string
               nodeSelector:
