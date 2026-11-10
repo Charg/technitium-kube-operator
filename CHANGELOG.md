@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.2](https://github.com/Charg/technitium-kube-operator/compare/v1.4.1...v1.4.2) (2026-11-09)
+
+
+### Bug Fixes
+
+* **deps:** lock file maintenance ([#137](https://github.com/Charg/technitium-kube-operator/issues/137)) ([3a5754d](https://github.com/Charg/technitium-kube-operator/commit/3a5754de2d8ba644bbb4b7cbe733e7b2ecf68078))
+* **deps:** update kubernetes packages to v0.37.2 ([#145](https://github.com/Charg/technitium-kube-operator/issues/145)) ([73d152e](https://github.com/Charg/technitium-kube-operator/commit/73d152ec56d783a3d12ba88d771844775d40498a))
+
 ## [1.4.1](https://github.com/Charg/technitium-kube-operator/compare/v1.4.0...v1.4.1) (2026-10-24)
 
 
