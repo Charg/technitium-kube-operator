@@ -56,6 +56,11 @@ Always use `kubebuilder create api` and `kubebuilder create webhook` to scaffold
 The e2e tests are designed to validate the solution in an isolated environment (similar to GitHub Actions CI).
 Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
 
+### GitHub Actions
+- Pin every `uses:` to a full commit SHA with a version comment.
+- After adding or bumping an action, regenerate `.github/workflows/actions.lock` with
+  `gh actions-lock --no-narrow`. Without `--no-narrow` it rewrites SHA pins to tags.
+
 ## After Making Changes
 
 **After editing `*_types.go` or markers:**
