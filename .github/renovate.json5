@@ -12,6 +12,11 @@
   semanticCommitType: "fix",
   commitMessageLowerCase: "auto",
 
+  // Keep in sync with the gh-actions-lock version used locally.
+  constraints: {
+    ghActionsLock: "v0.4.1",
+  },
+
   // config:recommended ignores **/test/**, which would hide test/testimage/testimage.go from the
   // Technitium image manager below. Same list as :ignoreModulesAndTests minus **/test/**.
   ignorePaths: [
