@@ -46,4 +46,3 @@ resources:
 - zone_admin_role.yaml
 - zone_editor_role.yaml
 - zone_viewer_role.yaml
-
