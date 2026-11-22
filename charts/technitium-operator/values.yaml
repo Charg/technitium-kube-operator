@@ -9,7 +9,7 @@ fullnameOverride: ""
 image:
   repository: ghcr.io/charg/technitium-kube-operator
   # Defaults to the chart's appVersion when empty.
-  tag: ""
+  tag: "@sha256:e811df2c982e6f5c1b7cebf618bc91eaba4ba7b421044b994e435a40f798f4f3"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
