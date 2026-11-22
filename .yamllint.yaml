@@ -1,0 +1,25 @@
+---
+extends: default
+
+ignore: |
+  .scratch/
+  .direnv/
+  .copier-answers.yml
+  # Helm chart templates are Go templates, not YAML (helm-charts flavour; harmless without charts).
+  charts/*/templates/
+  # Project: kubebuilder's config/ is generated (controller-gen) or scaffolded (kubebuilder).
+  config/
+
+rules:
+  line-length:
+    max: 120
+  comments:
+    min-spaces-from-content: 1
+  truthy:
+    # GitHub Actions' `on:` key is parsed as a boolean by yamllint's default rule.
+    check-keys: false
+  braces:
+    max-spaces-inside: 1
+  octal-values:
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true

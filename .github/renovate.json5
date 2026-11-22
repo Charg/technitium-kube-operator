@@ -1,20 +1,29 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  // Shared policy (7-day release age, automerge, nix lock maintenance, actions pinning) and each
+  // flavour's rules live in Charg/template. Add only this repo's packageRules and customManagers here.
   extends: [
-    "config:recommended",
+    "github>Charg/template//renovate/default.json5",
+    "github>Charg/template//renovate/go.json5",
+    "github>Charg/template//renovate/container-images.json5",
+    "github>Charg/template//renovate/helm-charts.json5",
     ":dependencyDashboard",
-    ":semanticCommits",
-    // Actions are already SHA-pinned with # vX.Y.Z comments; keep the digest and comment in sync.
-    "helpers:pinGitHubActionDigests",
   ],
 
-  // release-please owns commit/PR wording, so match its conventional-commit types.
+  // release-please owns versions and the changelog: dependency bumps are `fix:` so they release.
   semanticCommitType: "fix",
   commitMessageLowerCase: "auto",
+  rangeStrategy: "bump",
 
-  // Keep in sync with the gh-actions-lock version used locally.
-  constraints: {
-    ghActionsLock: "v0.4.1",
+  // Batch runs into a weekly window to cut PR churn. This only limits when branches are created;
+  // automerge happens whenever CI goes green.
+  schedule: ["* * * * 0"],
+  // Releases without a timestamp are held rather than waved through the release-age wait.
+  minimumReleaseAgeBehaviour: "timestamp-required",
+  // flake.lock refreshes have no release timestamp for the age check to gate, so they wait for a
+  // human.
+  lockFileMaintenance: {
+    automerge: false,
   },
 
   // config:recommended ignores **/test/**, which would hide test/testimage/testimage.go from the
@@ -29,90 +38,21 @@
     "**/__fixtures__/**",
   ],
 
-  labels: ["dependencies"],
-  rangeStrategy: "bump",
-
-  // Batch runs into a weekly window to cut PR churn. This only limits when branches are created;
-  // automerge happens whenever CI goes green.
-  schedule: ["* * * * 0"],
-
-  // Supply-chain cooldown: a release must be 7 days old before Renovate proposes it. With strict
-  // filtering no branch or PR exists until the age check passes, so platform automerge (enqueued at
-  // PR creation) can never merge a release younger than this. Releases without a timestamp are held
-  // rather than waved through. Both settings are Renovate >= 42 defaults; set here to pin intent.
-  minimumReleaseAge: "7 days",
-  internalChecksFilter: "strict",
-  minimumReleaseAgeBehaviour: "timestamp-required",
-
-  // GitHub native automerge, squash only (the only method the repo allows). The main ruleset's
-  // required status checks are what stop a PR merging before CI passes.
-  platformAutomerge: true,
-  automergeType: "pr",
-  automergeStrategy: "squash",
-
-  // Later rules override earlier ones, so the automerge default comes first and the opt-outs after.
-  // A grouped PR automerges only if every update in it is allowed to.
   packageRules: [
     {
-      matchUpdateTypes: ["minor", "patch", "digest", "pin", "pinDigest"],
-      automerge: true,
-    },
-    // Go module patches are safe to batch and automerge. Minors stay manual: most modules here are
-    // v0.x, where a minor bump is allowed to break the API.
-    {
-      matchManagers: ["gomod"],
-      matchUpdateTypes: ["patch"],
-      groupName: "go dependencies (patch)",
-    },
-    {
-      matchManagers: ["gomod"],
-      matchUpdateTypes: ["minor"],
-      groupName: "go dependencies (minor)",
-      automerge: false,
-    },
-    // k8s.io/* and sigs.k8s.io/* release in lockstep against a Kubernetes minor; bumping them
-    // individually produces incompatible go.mod graphs. Must come after the go dependency groups
-    // or their groupName wins. Kept manual: a minor here is a new Kubernetes minor.
-    {
-      matchManagers: ["gomod"],
-      matchPackageNames: ["k8s.io/**", "sigs.k8s.io/**"],
-      groupName: "kubernetes packages",
-      automerge: false,
-    },
-    // One PR for all GitHub Actions bumps instead of one per action.
-    {
-      matchManagers: ["github-actions"],
-      groupName: "github actions",
-    },
-    // go.mod pins the toolchain; treat it as a deliberate, separate change.
-    {
-      matchManagers: ["gomod"],
-      matchDepTypes: ["golang"],
-      groupName: "go toolchain",
-      automerge: false,
-    },
-    // A new Technitium server release can change API behaviour the operator relies on, so the
-    // e2e suite must pass before this merges. Never automerge; the label makes it easy to spot.
-    {
+      // A new Technitium server release can change API behaviour the operator relies on, so the
+      // e2e suite must pass before this merges. Never automerge; the label makes it easy to spot.
       matchDepNames: ["technitium/dns-server"],
       groupName: "technitium dns-server",
       automerge: false,
       addLabels: ["technitium-image"],
     },
-    // Chart version/appVersion carry x-release-please-version markers; Renovate must not touch them.
     {
+      // Chart version/appVersion carry x-release-please-version markers; Renovate must not touch them.
       matchFileNames: ["charts/technitium-operator/Chart.yaml"],
       enabled: false,
     },
   ],
-
-  // flake.lock refresh: pin nixpkgs/flake-utils inputs on a schedule. Lock file maintenance has no
-  // release timestamp, so minimumReleaseAge cannot gate it; it stays manual (automerge defaults off).
-  nix: { enabled: true },
-  lockFileMaintenance: {
-    enabled: true,
-    schedule: ["before 6am on sunday"],
-  },
 
   // Tool versions pinned as just variables. Track upstream releases without editing the justfile.
   customManagers: [

@@ -1,0 +1,108 @@
+---
+name: ci
+
+on:
+  pull_request:
+    branches:
+      - main
+  # main too, so a merge that breaks e2e (a Technitium bump, say) shows on main.
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Lint
+        run: nix develop -c just lint
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Run unit tests
+        run: nix develop -c just test
+
+  generated:
+    name: generated
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Check generated files are committed
+        run: nix develop -c just verify-generated
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    # Backstop above go test's own 45m -timeout, so a hang outside the test binary fails fast.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nix
+        uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+
+      - name: Run e2e tests
+        run: nix develop -c just test-e2e
+
+  # The one check main's ruleset requires, so adding or renaming jobs never touches the ruleset.
+  # Add new jobs to `needs`.
+  ci:
+    name: ci
+    if: always()
+    needs: [lint, unit, generated, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to succeed or be skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          for result in ${RESULTS}; do
+            case "${result}" in
+              success | skipped) ;;
+              *) echo "a required job ended with: ${result}" >&2; exit 1 ;;
+            esac
+          done
