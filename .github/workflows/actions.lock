@@ -13,7 +13,7 @@ workflows:
         - 'googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7'
     '.github/workflows/release.yml':
         - 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1'
-        - 'azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310'
+        - 'azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e'
         - 'docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc'
         - 'docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550'
         - 'docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302'
@@ -25,9 +25,9 @@ dependencies:
         commit: 'sha1-3d3c42e5aac5ba805825da76410c181273ba90b1'
         owner_id: 44036562
         repo_id: 197814629
-    'azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310':
-        ref: 'v5.0.1'
-        commit: 'sha1-9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310'
+    'azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e':
+        ref: 'v5.1.0'
+        commit: 'sha1-2f5e7bc67f1f9972ab16657bb795f36d8f04de0e'
         owner_id: 6844498
         repo_id: 210310251
     'cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086':
