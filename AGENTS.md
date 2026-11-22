@@ -40,7 +40,10 @@
 - Go and golangci-lint come from the flake. `just lint` runs golangci-lint's linters and formatters
   (`.golangci.yml`) over every module (`hack/lint.d/go.sh`); `just fmt` applies the formatters and
   `just test` runs `go test ./...`.
-- `go.mod`'s `go` line must not be newer than the flake's Go, or golangci-lint refuses the module.
+- The flake's Go is the one golangci-lint is built with (it can be newer than `pkgs.go`).
+  `go.mod`'s `go` line must not be newer than it, or golangci-lint refuses the module.
+- The shell has no C compiler and sets `CGO_ENABLED=0`. A project that needs cgo adds `pkgs.gcc`
+  to `flake.nix` and drops that line.
 - Renovate groups Go module patches (automerged) and minors (manual); `k8s.io` and `sigs.k8s.io`
   modules move together in one manual group, and the Go toolchain bump is its own manual PR.
 

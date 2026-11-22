@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
-_commit: 244ff03
+_commit: 82f30e1
 _src_path: gh:Charg/template
 description: Kubernetes operator for Technitium DNS Server
 flavours:
