@@ -217,16 +217,16 @@ build-installer tag=img: manifests generate kustomize
 install: manifests kustomize
     #!/usr/bin/env bash
     set -euo pipefail
-    out="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
-    if [ -n "$out" ]; then echo "$out" | "{{ kubectl }}" apply -f -; else echo "No CRDs to install; skipping."; fi
+    crds="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
+    if [ -n "$crds" ]; then echo "$crds" | "{{ kubectl }}" apply -f -; else echo "No CRDs to install; skipping."; fi
 
 # Uninstall CRDs from the K8s cluster specified in ~/.kube/config
 [group('Deployment')]
 uninstall ignore-not-found="false": manifests kustomize
     #!/usr/bin/env bash
     set -euo pipefail
-    out="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
-    if [ -n "$out" ]; then echo "$out" | "{{ kubectl }}" delete --ignore-not-found="{{ ignore-not-found }}" -f -; else echo "No CRDs to delete; skipping."; fi
+    crds="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
+    if [ -n "$crds" ]; then echo "$crds" | "{{ kubectl }}" delete --ignore-not-found="{{ ignore-not-found }}" -f -; else echo "No CRDs to delete; skipping."; fi
 
 # Deploy the controller to the K8s cluster specified in ~/.kube/config
 [group('Deployment')]
