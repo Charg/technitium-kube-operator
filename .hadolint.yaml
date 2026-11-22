@@ -1,0 +1,4 @@
+---
+# hadolint (hack/lint.d/container-images.sh). Ignore a rule repo-wide here, with the reason, or
+# for one line with a `# hadolint ignore=DL3008` comment above it.
+ignored: []

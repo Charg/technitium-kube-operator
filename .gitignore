@@ -7,22 +7,50 @@ Thumbs.db
 *.swo
 *~
 
-# Helm
-*.tgz
-charts/*/charts/
-charts/*/Chart.lock
-.cr-release-packages/
-.cr-index/
-
-# helm-unittest / helm-docs artifacts
-*.snap.actual
-
-# Local scratch / planning
+# Local scratch: plans, tickets, throwaway output
 .scratch/
 
 # Local secrets / env
 .env
 .env.*
+
+# nix
+result
+result-*
+.direnv/
+
+# Go build and test output
+bin/
+*.test
+*.out
+
+# Helm: packaged charts and fetched dependencies
+*.tgz
+charts/*/charts/
+charts/*/Chart.lock
+*.snap.actual
+
+# Personal Claude Code state
+# Personal preferences and auto-allow permissions
+.claude/settings.local.json
+# Process lock for background schedules
+.claude/scheduled_tasks.lock
+# Parallel agent workspaces (duplicate codebase clones)
+.claude/worktrees/
+# Auto-memory state and local conversation history
+.claude/memory/
+.claude/plans/
+# Local, per-developer project instructions
+CLAUDE.local.md
+.playwright-mcp/
+
+# --- Project ---
+
+# chart-releaser
+.cr-release-packages/
+.cr-index/
+
+# Local secrets
 *.local.yaml
 secrets.yaml
 
@@ -35,31 +63,8 @@ kubeconfig*
 *.pem
 cosign.key
 
-# nix
-result
-result-*
-.direnv/
-
-# Misc build output
+# Build output and caches
 dist/
 tmp/
 .cache/
-
-# Go / kubebuilder build output
-bin/
-*.out
-cover.out
 vendor/
-
-# Ignore personal Claude Code configurations and plans
-# Personal preferences and auto-allow permissions
-.claude/settings.local.json
-# Process lock for background schedules
-.claude/scheduled_tasks.lock
-# Parallel agent workspaces (duplicate codebase clones)
-.claude/worktrees/
-# Auto-memory state and local conversation history
-.claude/memory/
-.claude/plans/
-# Local, per-developer project instructions
-CLAUDE.local.md

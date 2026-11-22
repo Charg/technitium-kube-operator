@@ -1,6 +1,98 @@
-# technitium-operator - AI Agent Guide
+# AGENTS.md
 
-## Project Structure
+<!-- BEGIN TEMPLATE: managed by Charg/template through `copier update`. Edit it there, not here. -->
+
+## Toolchain
+
+- **The toolchain is the nix flake.** Run everything inside `nix develop` (direnv loads it through
+  `.envrc`), or one-shot as `nix develop -c just <recipe>`. Never install tools ad hoc or pin a tool
+  version in a script or workflow: add it to `flake.nix`, bump it with `nix flake update`.
+- **`just` is the only interface.** Recipes are one-line shims over scripts in `hack/`, and CI calls
+  the same recipes a developer runs locally. New behaviour goes in `hack/`, then gets a recipe, then
+  CI calls the recipe. No logic in workflow YAML beyond setup and secrets.
+- **`hack/` scripts** are bash and start with `source "$(dirname "${BASH_SOURCE[0]}")/tools.sh"`,
+  which sets `set -euo pipefail` and holds the shared helpers (`log`, `die`, `require_tools`,
+  `repo_files`).
+- Run `just lint` before committing. The prek hook (`just install-hooks`) runs it on commit.
+- Plans, tickets and throwaway output go in `.scratch/` (gitignored).
+
+## GitHub Actions
+
+- Workflows start with `permissions: {}` and grant each job only what it needs. Check out with
+  `persist-credentials: false`.
+- Pin every `uses:` to a full commit SHA with a version comment.
+- After adding or bumping an action, regenerate `.github/workflows/actions.lock` with
+  `gh actions-lock --no-narrow`. Without `--no-narrow` it rewrites SHA pins to tags, which zizmor's
+  `unpinned-uses` audit rejects.
+- Renovate policy (release age, automerge, nix lock maintenance) comes from the shared preset in
+  `Charg/template` (`renovate/default.json5`). `.github/renovate.json5` holds only this repo's
+  additions.
+
+## Commits
+
+- Conventional commits: `feat:`, `fix:`, `chore:`, `ci:`, `docs:`, `refactor:`, `test:`,
+  optionally scoped (`feat(api): ...`).
+- Work on a branch and open a PR. PRs squash-merge. Don't commit to `main` directly.
+- Commit only when asked.
+
+## Go
+
+- Go and golangci-lint come from the flake. `just lint` runs golangci-lint's linters and formatters
+  (`.golangci.yml`) over every module (`hack/lint.d/go.sh`); `just fmt` applies the formatters and
+  `just test` runs `go test ./...`.
+- The flake's Go is the one golangci-lint is built with (it can be newer than `pkgs.go`).
+  `go.mod`'s `go` line must not be newer than it, or golangci-lint refuses the module.
+- The shell has no C compiler and sets `CGO_ENABLED=0`. A project that needs cgo adds `pkgs.gcc`
+  to `flake.nix` and drops that line.
+- Renovate groups Go module patches (automerged) and minors (manual); `k8s.io` and `sigs.k8s.io`
+  modules move together in one manual group, and the Go toolchain bump is its own manual PR.
+
+## Container images
+
+- The docker CLI and buildx come from the flake and talk to the host's daemon.
+- `just lint` runs hadolint over every `Dockerfile` and `Containerfile` (`hack/lint.d/container-images.sh`).
+  Accept a finding for one line with a `# hadolint ignore=DLxxxx` comment and the reason, or for the
+  repo in `.hadolint.yaml`.
+- Pin base images by digest (`image:tag@sha256:...`). Renovate keeps the digests current and
+  merges digest-only bumps without the release-age wait: they are how base-image CVE fixes arrive.
+
+## Helm charts
+
+- Charts live at `charts/<name>/`. helm 3 (with helm-unittest), chart-testing and kubeconform come
+  from the flake, which stays on nixos-26.05: nixos-unstable ships helm 4.
+- `just lint` runs `ct lint --all` (`ct.yaml`) and kubeconform over the manifests each chart renders
+  with each `ci/*-values.yaml`, or `values.yaml` when it has none (`hack/lint.d/helm-charts.sh`).
+  yamllint skips `charts/*/templates/`, which is Go templates rather than YAML.
+- Renovate leaves digest-only bumps of images (a tag re-pushed upstream) for a human.
+
+## Template
+
+- Shared files (flake, justfile, `hack/tools.sh`, `hack/lint.sh`, `hack/lint.d/`, lint configs, CI,
+  this section) come from `Charg/template`; the answers are in `.copier-answers.yml`, which is
+  never edited by hand. Pull template changes with `copier update` and resolve any conflicts it
+  leaves. Add a flavour with `copier update --data 'flavours=[...]'`, listing every flavour wanted.
+- Projects extend the shared files freely (packages in `flake.nix`, recipes, lint steps; a new lint
+  step can be its own script in `hack/lint.d/`);
+  `copier update` merges template changes around those edits.
+- Only the text between the TEMPLATE markers in this file belongs to the template. Project rules go
+  under `## Project` below.
+
+<!-- END TEMPLATE -->
+
+## Project
+
+Kubernetes operator for Technitium DNS Server (kubebuilder layout), with its Helm chart in
+`charts/technitium-operator/`. Released by release-please: `release.yml` builds and signs the image
+and chart on its tags.
+
+- Tools that must match a version in this repo stay pinned in the justfile and are installed to
+  `bin/` (`controller-gen`, `setup-envtest`, and golangci-lint rebuilt with the `.custom-gcl.yml`
+  plugins, which `just lint` uses). Everything else comes from the flake.
+- `.golangci.yml` is this repo's own, not the template's: it enables the `logcheck` plugin, which
+  only the plugin build knows.
+- CI (`ci.yaml`) runs `just lint`, `just test`, `just verify-generated` and `just test-e2e`.
+
+### Project Structure
 
 **Single-group layout (default):**
 ```
@@ -34,34 +126,29 @@ Multi-group layout organizes APIs by group name (e.g., `batch`, `apps`). Check t
 6. Fix `path` in `PROJECT` file for each resource
 7. Update test suite CRD paths (add one more `..` to relative paths)
 
-## Critical Rules
+### Critical Rules
 
-### Never Edit These (Auto-Generated)
+#### Never Edit These (Auto-Generated)
 - `config/crd/bases/*.yaml` - from `just manifests`
 - `config/rbac/role.yaml` - from `just manifests`
 - `config/webhook/manifests.yaml` - from `just manifests`
 - `**/zz_generated.*.go` - from `just generate`
 - `PROJECT` - from `kubebuilder [OPTIONS]`
 
-### Never Remove Scaffold Markers
+#### Never Remove Scaffold Markers
 Do NOT delete `// +kubebuilder:scaffold:*` comments. CLI injects code at these markers.
 
-### Keep Project Structure
+#### Keep Project Structure
 Do not move files around. The CLI expects files in specific locations.
 
-### Always Use CLI Commands
+#### Always Use CLI Commands
 Always use `kubebuilder create api` and `kubebuilder create webhook` to scaffold. Do NOT create files manually.
 
-### E2E Tests Require an Isolated Kind Cluster
+#### E2E Tests Require an Isolated Kind Cluster
 The e2e tests are designed to validate the solution in an isolated environment (similar to GitHub Actions CI).
 Ensure you run them against a dedicated [Kind](https://kind.sigs.k8s.io/) cluster (not your “real” dev/prod cluster).
 
-### GitHub Actions
-- Pin every `uses:` to a full commit SHA with a version comment.
-- After adding or bumping an action, regenerate `.github/workflows/actions.lock` with
-  `gh actions-lock --no-narrow`. Without `--no-narrow` it rewrites SHA pins to tags.
-
-## After Making Changes
+### After Making Changes
 
 **After editing `*_types.go` or markers:**
 ```
@@ -75,14 +162,14 @@ just lint-fix   # Auto-fix code style
 just test       # Run unit tests
 ```
 
-## CLI Commands Cheat Sheet
+### CLI Commands Cheat Sheet
 
-### Create API (your own types)
+#### Create API (your own types)
 ```bash
 kubebuilder create api --group <group> --version <version> --kind <Kind>
 ```
 
-### Deploy Image Plugin (scaffold to deploy/manage ANY container image)
+#### Deploy Image Plugin (scaffold to deploy/manage ANY container image)
 
 Generate a controller that deploys and manages a container image (nginx, redis, memcached, your app, etc.):
 
@@ -96,7 +183,7 @@ kubebuilder create api --group example.com --version v1alpha1 --kind Memcached \
 Scaffolds good-practice code: reconciliation logic, status conditions, finalizers, RBAC. Use as a reference implementation.
 
 
-### Create Webhooks
+#### Create Webhooks
 ```bash
 # Validation + defaulting
 kubebuilder create webhook --group <group> --version <version> --kind <Kind> \
@@ -107,7 +194,7 @@ kubebuilder create webhook --group <group> --version v1 --kind <Kind> \
   --conversion --spoke v2
 ```
 
-### Controller for Core Kubernetes Types
+#### Controller for Core Kubernetes Types
 ```bash
 # Watch Pods
 kubebuilder create api --group core --version v1 --kind Pod \
@@ -118,7 +205,7 @@ kubebuilder create api --group apps --version v1 --kind Deployment \
   --controller=true --resource=false
 ```
 
-### Controller for External Types (e.g., from other operators)
+#### Controller for External Types (e.g., from other operators)
 
 Watch resources from external APIs (cert-manager, Argo CD, Istio, etc.):
 
@@ -134,7 +221,7 @@ kubebuilder create api \
 
 **Note:** Use `--external-api-module=<module>@<version>` only if you need a specific version. Otherwise, omit `@<version>` to use what's in go.mod.
 
-### Webhook for External Types
+#### Webhook for External Types
 
 ```bash
 # Example: validating external resources
@@ -146,18 +233,18 @@ kubebuilder create webhook \
   --external-api-module=github.com/cert-manager/cert-manager
 ```
 
-## Testing & Development
+### Testing & Development
 
 ```bash
 just test              # Run unit tests (uses envtest: real K8s API + etcd)
 just run               # Run locally (uses current kubeconfig context)
-just lint              # Run golangci-lint exactly as CI does
+just lint              # Every linter, exactly as CI runs it (golangci-lint with plugins, chart, workflows)
 just install-hooks     # Install prek hooks (.pre-commit-config.yaml): lint on commit
 ```
 
 Tests use **Ginkgo + Gomega** (BDD style). Check `suite_test.go` for setup.
 
-## Deployment Workflow
+### Deployment Workflow
 
 ```bash
 # 1. Regenerate manifests
@@ -175,7 +262,7 @@ kubectl apply -k config/samples/
 kubectl logs -n <project>-system deployment/<project>-controller-manager -c manager -f
 ```
 
-### API Design
+#### API Design
 
 **Key markers for** `api/<version>/*_types.go`:
 
@@ -197,7 +284,7 @@ kubectl logs -n <project>-system deployment/<project>-controller-manager -c mana
 - **Use predefined types**: `metav1.Time` instead of `string` for dates
 - **Follow K8s API conventions**: Standard field names (`spec`, `status`, `metadata`)
 
-### Controller Design
+#### Controller Design
 
 **RBAC markers in** `internal/controller/*_controller.go`:
 
@@ -217,7 +304,7 @@ kubectl logs -n <project>-system deployment/<project>-controller-manager -c mana
 - **Watch secondary resources**: Use `.Owns()` or `.Watches()`, not just `RequeueAfter`
 - **Finalizers**: Clean up external resources (buckets, VMs, DNS entries)
 
-### Logging
+#### Logging
 
 **Follow Kubernetes logging message style guidelines:**
 
@@ -236,7 +323,7 @@ log.Error(err, "Failed to create Pod", "name", name)
 
 **Reference:** https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md#message-style-guidelines
 
-### Webhooks
+#### Webhooks
 - **Create all types together**: `--defaulting --programmatic-validation --conversion`
 - **When`--force`is used**: Backup custom logic first, then restore after scaffolding
 - **For multi-version APIs**: Use hub-and-spoke pattern (`--conversion --spoke v2`)
@@ -244,7 +331,7 @@ log.Error(err, "Failed to create Pod", "name", name)
   - Spoke versions: Newer versions that convert to/from hub (v2, v3)
   - Example: `--group crew --version v1 --kind Captain --conversion --spoke v2` (v1 is hub, v2 is spoke)
 
-### Learning from Examples
+#### Learning from Examples
 
 The **deploy-image plugin** scaffolds a complete controller following good practices. Use it as a reference implementation:
 
@@ -255,9 +342,9 @@ kubebuilder create api --group example --version v1alpha1 --kind MyApp \
 
 Generated code includes: status conditions (`metav1.Condition`), finalizers, owner references, events, idempotent reconciliation.
 
-## Distribution Options
+### Distribution Options
 
-### Option 1: YAML Bundle (Kustomize)
+#### Option 1: YAML Bundle (Kustomize)
 
 ```bash
 # Generate dist/install.yaml from Kustomize manifests
@@ -274,7 +361,7 @@ just build-installer <registry>/<project>:tag
 kubectl apply -f https://raw.githubusercontent.com/<org>/<repo>/<tag>/dist/install.yaml
 ```
 
-### Option 2: Helm Chart
+#### Option 2: Helm Chart
 
 ```bash
 kubebuilder edit --plugins=helm/v2-alpha                      # Generates dist/chart/ (default)
@@ -301,27 +388,27 @@ helm install my-release ./<output-dir>/chart/ --namespace <ns> --create-namespac
 2. Re-run: `kubebuilder edit --plugins=helm/v2-alpha --force` (use same `--output-dir` if customized)
 3. Manually restore your custom values from the backup
 
-### Publish Container Image
+#### Publish Container Image
 
 ```bash
 export IMG=<registry>/<project>:<version>
 just docker-build && just docker-push
 ```
 
-## References
+### References
 
-### Essential Reading
+#### Essential Reading
 - **Kubebuilder Book**: https://book.kubebuilder.io (comprehensive guide)
 - **controller-runtime FAQ**: https://github.com/kubernetes-sigs/controller-runtime/blob/main/FAQ.md (common patterns and questions)
 - **Good Practices**: https://book.kubebuilder.io/reference/good-practices.html (why reconciliation is idempotent, status conditions, etc.)
 - **Logging Conventions**: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-instrumentation/logging.md#message-style-guidelines (message style, verbosity levels)
 
-### API Design & Implementation
+#### API Design & Implementation
 - **API Conventions**: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md
 - **Operator Pattern**: https://kubernetes.io/docs/concepts/extend-kubernetes/operator/
 - **Markers Reference**: https://book.kubebuilder.io/reference/markers.html
 
-### Tools & Libraries
+#### Tools & Libraries
 - **controller-runtime**: https://github.com/kubernetes-sigs/controller-runtime
 - **controller-tools**: https://github.com/kubernetes-sigs/controller-tools
 - **Kubebuilder Repo**: https://github.com/kubernetes-sigs/kubebuilder

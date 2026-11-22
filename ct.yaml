@@ -1,0 +1,9 @@
+---
+# chart-testing (hack/lint.d/helm-charts.sh).
+chart-dirs:
+  - charts
+target-branch: main
+validate-maintainers: false
+# Lint runs over every chart, changed or not, so a version check would fail every unchanged chart.
+# Release pipelines that need it pass --check-version-increment for the changed charts.
+check-version-increment: false

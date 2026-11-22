@@ -1,3 +1,42 @@
+# technitium-kube-operator: dev tasks. Every recipe assumes the nix toolchain is on PATH: run inside the
+# dev shell (`nix develop`, or direnv via .envrc), or one-shot as `nix develop -c just <recipe>`.
+# Recipes are one-line shims over scripts in hack/; CI calls the same recipes.
+
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# List available recipes.
+_default:
+    @just --list --unsorted
+
+# Run every linter: what CI and the pre-commit hook run. Go lint uses golangci-lint rebuilt with
+# the plugins in .custom-gcl.yml.
+lint: golangci-lint
+    GOLANGCI_LINT="{{ golangci_lint_custom }}" hack/lint.sh
+
+# Format nix files, Go.
+fmt:
+    git ls-files -z -- '*.nix' | xargs -0 --no-run-if-empty nixfmt
+    golangci-lint fmt ./...
+
+# Run the unit tests (envtest: a real API server and etcd; e2e is `just test-e2e`).
+test: manifests generate fmt vet setup-envtest
+    #!/usr/bin/env bash
+    set -euo pipefail
+    eval "$(just _envtest-versions)"
+    export KUBEBUILDER_ASSETS="$("{{ envtest }}" use "${ENVTEST_K8S_VERSION}" --bin-dir "{{ localbin }}" -p path)"
+    go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+
+# Install the prek git hooks from .pre-commit-config.yaml (once per clone).
+install-hooks:
+    prek install
+
+# List the dev shell's packages and the versions flake.lock pins them to.
+versions:
+    @nix eval --raw ".#devShells.$(nix eval --impure --raw --expr builtins.currentSystem).default.nativeBuildInputs" \
+      --apply 'ps: builtins.concatStringsSep "" (map (p: "${p.pname or p.name} ${p.version or "-"}\n") ps)'
+
+# --- Project ---
+
 # Image URL used by the image build/push/deploy recipes
 img := env_var_or_default("IMG", "controller:latest")
 # Year substituted for the YEAR placeholder in the boilerplate header
@@ -25,13 +64,6 @@ envtest := localbin / "setup-envtest"
 golangci_lint := localbin / "golangci-lint"
 # golangci-lint rebuilt with the plugins in .custom-gcl.yml; the lint recipes run this one.
 golangci_lint_custom := localbin / "golangci-lint-custom"
-
-set shell := ["bash", "-euo", "pipefail", "-c"]
-
-# List available recipes
-[group('General')]
-default:
-    @just --list
 
 ##
 ## Development
@@ -65,24 +97,24 @@ helm-verify:
 generate: controller-gen
     "{{ controller_gen }}" object:headerFile="hack/boilerplate.go.txt",year={{ year }} paths="./..."
 
-# Run go fmt against code
-[group('Development')]
-fmt:
-    go fmt ./...
-
 # Run go vet against code
 [group('Development')]
 vet:
     go vet ./...
 
-# Run unit tests
+# Regenerate config/, DeepCopy code and the chart, fail if any of it isn't committed, then lint the
+# chart and check it renders what config/ holds (CI).
 [group('Development')]
-test: manifests generate fmt vet setup-envtest
+verify-generated: manifests generate
     #!/usr/bin/env bash
     set -euo pipefail
-    eval "$(just _envtest-versions)"
-    export KUBEBUILDER_ASSETS="$("{{ envtest }}" use "${ENVTEST_K8S_VERSION}" --bin-dir "{{ localbin }}" -p path)"
-    go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
+    if [ -n "$(git status --porcelain)" ]; then
+        git status --short
+        git diff
+        echo "error: generated files are out of date: run 'just manifests generate' and commit the result" >&2
+        exit 1
+    fi
+    just helm-verify
 
 # Set up a Kind cluster for e2e tests if it does not exist
 [group('Development')]
@@ -123,11 +155,6 @@ test-e2e: setup-test-e2e manifests generate fmt vet
 cleanup-test-e2e:
     @"{{ kind }}" delete cluster --name "{{ kind_cluster }}"
 
-# Run golangci-lint
-[group('Development')]
-lint: golangci-lint
-    "{{ golangci_lint_custom }}" run
-
 # Run golangci-lint and apply fixes
 [group('Development')]
 lint-fix: golangci-lint
@@ -137,11 +164,6 @@ lint-fix: golangci-lint
 [group('Development')]
 lint-config: golangci-lint
     "{{ golangci_lint_custom }}" config verify
-
-# Install the prek git hooks from .pre-commit-config.yaml (opt-in, per clone)
-[group('Development')]
-install-hooks:
-    prek install
 
 ##
 ## Build
@@ -195,16 +217,16 @@ build-installer tag=img: manifests generate kustomize
 install: manifests kustomize
     #!/usr/bin/env bash
     set -euo pipefail
-    out="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
-    if [ -n "$out" ]; then echo "$out" | "{{ kubectl }}" apply -f -; else echo "No CRDs to install; skipping."; fi
+    crds="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
+    if [ -n "$crds" ]; then echo "$crds" | "{{ kubectl }}" apply -f -; else echo "No CRDs to install; skipping."; fi
 
 # Uninstall CRDs from the K8s cluster specified in ~/.kube/config
 [group('Deployment')]
 uninstall ignore-not-found="false": manifests kustomize
     #!/usr/bin/env bash
     set -euo pipefail
-    out="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
-    if [ -n "$out" ]; then echo "$out" | "{{ kubectl }}" delete --ignore-not-found="{{ ignore-not-found }}" -f -; else echo "No CRDs to delete; skipping."; fi
+    crds="$("{{ kustomize }}" build config/crd 2>/dev/null || true)"
+    if [ -n "$crds" ]; then echo "$crds" | "{{ kubectl }}" delete --ignore-not-found="{{ ignore-not-found }}" -f -; else echo "No CRDs to delete; skipping."; fi
 
 # Deploy the controller to the K8s cluster specified in ~/.kube/config
 [group('Deployment')]
