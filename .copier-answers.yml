@@ -1,0 +1,11 @@
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: 244ff03
+_src_path: gh:Charg/template
+description: Kubernetes operator for Technitium DNS Server
+flavours:
+- go
+- container-images
+- helm-charts
+github: true
+nixpkgs_channel: nixos-26.05
+project_name: technitium-kube-operator
